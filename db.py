@@ -8,22 +8,20 @@ import os
 import hashlib
 import platform
 import shutil
-import tempfile  # <--- IMPORTANTE: aggiunto per Streamlit Cloud
+import tempfile
 from datetime import datetime, date
 from contextlib import contextmanager
 import logging
 from typing import Optional, Dict, List, Any, Tuple
 
 # ============================================================================
-# CONFIGURAZIONE PERCORSO DATABASE (AGGIUNTO PER STREAMLIT CLOUD)
+# CONFIGURAZIONE PERCORSO DATABASE
 # ============================================================================
 def get_database_path():
     """Restituisce il percorso corretto per il database in base all'ambiente"""
     if os.environ.get('STREAMLIT_CLOUD'):
-        # Su Streamlit Cloud, usa la cartella temporanea (scrivibile)
         return os.path.join(tempfile.gettempdir(), "ristorante.db")
     else:
-        # In locale, usa la cartella corrente
         return "ristorante.db"
 
 DB_PATH = get_database_path()
@@ -85,9 +83,8 @@ def get_db_connection(init_mode: bool = False):
         timeout = 60 if init_mode else 30
         journal_mode = "DELETE" if init_mode else "WAL"
         
-        # Usa il percorso dinamico
         conn = sqlite3.connect(
-            DB_PATH,  # <--- USATO IL PERCORSO DINAMICO
+            DB_PATH,
             check_same_thread=False,
             timeout=timeout,
             detect_types=sqlite3.PARSE_DECLTYPES,
@@ -115,14 +112,13 @@ def get_db_connection(init_mode: bool = False):
                 conn.close()
 
 # ============================================================================
-# FUNZIONE HELPER PER QUERY RAPIDE (CORRETTA)
+# FUNZIONE HELPER PER QUERY RAPIDE
 # ============================================================================
 def esegui_query(query: str, params: tuple = (), 
                  fetchone: bool = False, fetchall: bool = False, 
                  commit: bool = False) -> Any:
     """Esegue query SQL in modo sicuro"""
     
-    # Usa il percorso dinamico
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = dict_factory
     cursor = conn.cursor()
@@ -451,7 +447,7 @@ def create_tables(cursor):
         )
     """)
     
-    # 13. CLIENTI (AGGIUNTO PER LOGIN SOCIALE)
+    # 13. CLIENTI
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS clienti (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -607,82 +603,374 @@ def populate_initial_data(cursor):
     logger.info("Dati iniziali caricati con successo")
 
 # ============================================================================
-# INIZIALIZZAZIONE DATABASE
+# SERVICE LAYER
 # ============================================================================
-def init_db(force=False):
-    """Inizializza il database completo"""
+
+class TavoloService:
+    """Gestione tavoli e sale"""
     
-    print("=" * 60)
-    print("🔄 INIZIALIZZAZIONE DATABASE")
-    print("=" * 60)
-    print(f"📦 Database path: {DB_PATH}")
+    @staticmethod
+    def get_tutti_tavoli():
+        """Restituisce tutti i tavoli con info sale"""
+        return esegui_query("""
+            SELECT t.*, s.nome as sala_nome, s.colore as sala_colore
+            FROM tavoli t
+            JOIN sale s ON t.sala_id = s.id
+            ORDER BY s.ordine, t.numero
+        """, fetchall=True)
     
-    try:
-        # Assicurati che la directory esista
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    @staticmethod
+    def get_tavoli_per_sala(sala_id):
+        """Restituisce tavoli di una sala"""
+        return esegui_query("""
+            SELECT * FROM tavoli 
+            WHERE sala_id = ? 
+            ORDER BY numero
+        """, (sala_id,), fetchall=True)
+    
+    @staticmethod
+    def occupa_tavolo(tavolo_id, cameriere_id):
+        """Occupare un tavolo (crea comanda)"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO comande (tavolo_id, cameriere_id, stato)
+                VALUES (?, ?, 'ATTIVA')
+            """, (tavolo_id, cameriere_id))
+            comanda_id = cursor.lastrowid
+            
+            cursor.execute("""
+                UPDATE tavoli SET stato = 'OCCUPATO' WHERE id = ?
+            """, (tavolo_id,))
+            
+            return comanda_id
+    
+    @staticmethod
+    def libera_tavolo(tavolo_id):
+        """Libera un tavolo"""
+        esegui_query("""
+            UPDATE tavoli 
+            SET stato = 'LIBERO', richiesta_conto = 0
+            WHERE id = ?
+        """, (tavolo_id,), commit=True)
+
+
+class OrdineService:
+    """Gestione ordini e comande"""
+    
+    @staticmethod
+    def aggiungi_al_carrello(comanda_id, piatto_id, qty, variazioni=None, note=""):
+        """Aggiunge piatto alla comanda"""
+        piatto = esegui_query("SELECT * FROM piatti WHERE id = ?", (piatto_id,), fetchone=True)
+        if not piatto:
+            return False, "Piatto non trovato"
         
-        with get_db_connection(init_mode=True) as conn:
+        # Determina reparto dalla categoria
+        reparto = esegui_query("""
+            SELECT reparto_id FROM categorie WHERE id = ?
+        """, (piatto['categoria_id'],), fetchone=True)
+        
+        esegui_query("""
+            INSERT INTO comandine 
+            (comanda_id, piatto_id, piatto_nome, qty, prezzo_unitario, 
+             note, stato, reparto_id)
+            VALUES (?, ?, ?, ?, ?, ?, 'NUOVO', ?)
+        """, (comanda_id, piatto_id, piatto['nome'], qty, piatto['prezzo'], 
+              note or "", reparto['reparto_id']), commit=True)
+        
+        return True, "Piatto aggiunto"
+    
+    @staticmethod
+    def get_comande_attive(tavolo_id):
+        """Recupera comanda attiva per tavolo"""
+        return esegui_query("""
+            SELECT * FROM comande 
+            WHERE tavolo_id = ? AND stato = 'ATTIVA'
+            LIMIT 1
+        """, (tavolo_id,), fetchone=True)
+    
+    @staticmethod
+    def get_piatti_comanda(comanda_id):
+        """Recupera tutti i piatti di una comanda"""
+        return esegui_query("""
+            SELECT c.*, p.nome as piatto_nome, r.icona as reparto_icona
+            FROM comandine c
+            JOIN piatti p ON c.piatto_id = p.id
+            JOIN reparti r ON c.reparto_id = r.id
+            WHERE c.comanda_id = ?
+            ORDER BY c.timestamp_inserimento
+        """, (comanda_id,), fetchall=True)
+    
+    @staticmethod
+    def aggiorna_stato(commandina_id, nuovo_stato, operatore_id=None):
+        """Aggiorna stato di una commandina"""
+        timestamp_field = {
+            'IN_CORSO': 'timestamp_inizio',
+            'PRONTO': 'timestamp_pronto',
+            'SERVITO': 'timestamp_servito'
+        }.get(nuovo_stato, '')
+        
+        query = f"""
+            UPDATE comandine 
+            SET stato = ?, {timestamp_field} = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """ if timestamp_field else """
+            UPDATE comandine SET stato = ? WHERE id = ?
+        """
+        
+        esegui_query(query, (nuovo_stato, commandina_id), commit=True)
+        
+        # Notifica se diventa PRONTO
+        if nuovo_stato == 'PRONTO':
+            cmd = esegui_query("""
+                SELECT c.tavolo_id, t.numero, cmd.piatto_nome
+                FROM comandine cmd
+                JOIN comande c ON cmd.comanda_id = c.id
+                JOIN tavoli t ON c.tavolo_id = t.id
+                WHERE cmd.id = ?
+            """, (commandina_id,), fetchone=True)
+            
+            if cmd:
+                NotificaService.invia(
+                    titolo=f"Tavolo {cmd['numero']}",
+                    messaggio=f"{cmd['piatto_nome']} è pronto!",
+                    destinatario_ruolo='CAMERIERE'
+                )
+    
+    @staticmethod
+    def get_comande_per_reparto(reparto_id, stato=None):
+        """Recupera comande per reparto"""
+        query = """
+            SELECT c.*, t.numero as tavolo_numero, s.nome as sala_nome
+            FROM comandine c
+            JOIN comande co ON c.comanda_id = co.id
+            JOIN tavoli t ON co.tavolo_id = t.id
+            JOIN sale s ON t.sala_id = s.id
+            WHERE c.reparto_id = ?
+        """
+        params = [reparto_id]
+        
+        if stato and stato != 'TUTTI':
+            query += " AND c.stato = ?"
+            params.append(stato)
+        
+        query += " ORDER BY c.timestamp_inserimento"
+        
+        return esegui_query(query, tuple(params), fetchall=True)
+
+
+class PagamentoService:
+    """Gestione pagamenti e conti"""
+    
+    @staticmethod
+    def richiedi_conto(tavolo_id):
+        """Il cameriere richiede il conto"""
+        comanda = esegui_query("""
+            SELECT id FROM comande 
+            WHERE tavolo_id = ? AND stato = 'ATTIVA'
+        """, (tavolo_id,), fetchone=True)
+        
+        if not comanda:
+            return False, "Nessuna comanda attiva"
+        
+        # Verifica che tutti i piatti siano serviti
+        non_serviti = esegui_query("""
+            SELECT COUNT(*) as cnt FROM comandine
+            WHERE comanda_id = ? AND stato != 'SERVITO'
+        """, (comanda['id'],), fetchone=True)
+        
+        if non_serviti['cnt'] > 0:
+            return False, f"Ancora {non_serviti['cnt']} piatti da servire"
+        
+        esegui_query("""
+            UPDATE comande SET richiesta_conto = 1,
+                timestamp_richiesta_conto = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (comanda['id'],), commit=True)
+        
+        esegui_query("""
+            UPDATE tavoli SET richiesta_conto = 1 WHERE id = ?
+        """, (tavolo_id,), commit=True)
+        
+        # Notifica la cassa
+        NotificaService.invia(
+            titolo=f"Tavolo {tavolo_id}",
+            messaggio="Richiesto conto",
+            destinatario_ruolo='CASSA'
+        )
+        
+        return True, "Conto richiesto"
+    
+    @staticmethod
+    def get_conti_richiesti():
+        """Lista tavoli che hanno richiesto il conto"""
+        return esegui_query("""
+            SELECT 
+                c.id as comanda_id,
+                t.id as tavolo_id,
+                t.numero as tavolo_numero,
+                s.nome as sala_nome,
+                SUM(cmd.qty * cmd.prezzo_unitario) as totale,
+                COUNT(cmd.id) as piatti_totali,
+                c.timestamp_richiesta_conto
+            FROM comande c
+            JOIN tavoli t ON c.tavolo_id = t.id
+            JOIN sale s ON t.sala_id = s.id
+            LEFT JOIN comandine cmd ON c.id = cmd.comanda_id
+            WHERE c.richiesta_conto = 1 AND c.stato = 'ATTIVA'
+            GROUP BY c.id
+            ORDER BY c.timestamp_richiesta_conto
+        """, fetchall=True)
+    
+    @staticmethod
+    def registra_pagamento(comanda_id, metodo, contanti=0, carta=0, 
+                          bancomat=0, altri=0, operatore_id=None):
+        """Registra pagamento e libera tavolo"""
+        with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            if force:
-                cursor.execute("DROP TABLE IF EXISTS log_stampe")
-                cursor.execute("DROP TABLE IF EXISTS stampanti")
-                cursor.execute("DROP TABLE IF EXISTS notifiche")
-                cursor.execute("DROP TABLE IF EXISTS pagamenti")
-                cursor.execute("DROP TABLE IF EXISTS comandine")
-                cursor.execute("DROP TABLE IF EXISTS comande")
-                cursor.execute("DROP TABLE IF EXISTS variazioni")
-                cursor.execute("DROP TABLE IF EXISTS piatti")
-                cursor.execute("DROP TABLE IF EXISTS categorie")
-                cursor.execute("DROP TABLE IF EXISTS reparti")
-                cursor.execute("DROP TABLE IF EXISTS tavoli")
-                cursor.execute("DROP TABLE IF EXISTS sale")
-                cursor.execute("DROP TABLE IF EXISTS utenti")
-                cursor.execute("DROP TABLE IF EXISTS brand")
-                cursor.execute("DROP TABLE IF EXISTS giornale_cassa")
-                cursor.execute("DROP TABLE IF EXISTS preordini")
-                cursor.execute("DROP TABLE IF EXISTS preordini_dettaglio")
-                cursor.execute("DROP TABLE IF EXISTS clienti")
+            # Calcola totale
+            totale = cursor.execute("""
+                SELECT SUM(qty * prezzo_unitario) as tot
+                FROM comandine WHERE comanda_id = ?
+            """, (comanda_id,)).fetchone()['tot'] or 0
             
-            create_tables(cursor)
-            create_indexes(cursor)
-            populate_initial_data(cursor)
+            importo_totale = contanti + carta + bancomat + altri
+            resto = max(0, importo_totale - totale)
+            
+            # Registra pagamento
+            cursor.execute("""
+                INSERT INTO pagamenti 
+                (comanda_id, totale, contanti, carta, bancomat, altri, 
+                 resto, metodo, operatore_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (comanda_id, totale, contanti, carta, bancomat, altri, 
+                  resto, metodo, operatore_id))
+            
+            # Chiudi comanda
+            cursor.execute("""
+                UPDATE comande 
+                SET stato = 'CHIUSA', totale = ?, metodo_pagamento = ?,
+                    importo_pagato = ?, resto = ?, timestamp_chiusura = CURRENT_TIMESTAMP,
+                    richiesta_conto = 0
+                WHERE id = ?
+            """, (totale, metodo, importo_totale, resto, comanda_id))
+            
+            # Libera tavolo
+            cursor.execute("""
+                UPDATE tavoli 
+                SET stato = 'LIBERO', richiesta_conto = 0
+                WHERE id = (SELECT tavolo_id FROM comande WHERE id = ?)
+            """, (comanda_id,))
+            
+            return True
+
+
+class NotificaService:
+    """Gestione notifiche in tempo reale"""
+    
+    @staticmethod
+    def invia(titolo, messaggio, destinatario_id=None, destinatario_ruolo=None):
+        """Invia una notifica"""
+        esegui_query("""
+            INSERT INTO notifiche (tipo, titolo, messaggio, destinatario_id, destinatario_ruolo)
+            VALUES ('INFO', ?, ?, ?, ?)
+        """, (titolo, messaggio, destinatario_id, destinatario_ruolo), commit=True)
+    
+    @staticmethod
+    def get_non_lette(utente_id, ruolo):
+        """Recupera notifiche non lette"""
+        return esegui_query("""
+            SELECT * FROM notifiche 
+            WHERE letto = 0 AND (destinatario_id = ? OR destinatario_ruolo = ?)
+            ORDER BY timestamp_creazione DESC
+        """, (utente_id, ruolo), fetchall=True)
+    
+    @staticmethod
+    def segna_letta(notifica_id):
+        """Segna notifica come letta"""
+        esegui_query("""
+            UPDATE notifiche SET letto = 1, timestamp_lettura = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (notifica_id,), commit=True)
+
+
+class ReportService:
+    """Statistiche e report"""
+    
+    @staticmethod
+    def incasso_oggi():
+        """Incasso giornaliero"""
+        return esegui_query("""
+            SELECT COALESCE(SUM(totale), 0) as totale
+            FROM pagamenti
+            WHERE date(timestamp_pagamento) = date('now')
+        """, fetchone=True)['totale']
+    
+    @staticmethod
+    def ordini_in_corso():
+        """Numero ordini in preparazione"""
+        return esegui_query("""
+            SELECT COUNT(*) as cnt FROM comandine
+            WHERE stato IN ('NUOVO', 'IN_CORSO')
+        """, fetchone=True)['cnt']
+    
+    @staticmethod
+    def tavoli_occupati():
+        """Numero tavoli occupati"""
+        return esegui_query("""
+            SELECT COUNT(*) as cnt FROM tavoli
+            WHERE stato = 'OCCUPATO'
+        """, fetchone=True)['cnt']
+    
+    @staticmethod
+    def piatti_piu_venduti(limite=10):
+        """Top piatti più venduti"""
+        return esegui_query("""
+            SELECT piatto_nome, SUM(qty) as totale
+            FROM comandine
+            WHERE date(timestamp_inserimento) >= date('now', '-30 days')
+            GROUP BY piatto_nome
+            ORDER BY totale DESC
+            LIMIT ?
+        """, (limite,), fetchall=True)
+    
+    @staticmethod
+    def incassi_per_metodo_oggi():
+        """Incassi suddivisi per metodo di pagamento per oggi"""
+        return esegui_query("""
+            SELECT 
+                metodo,
+                COUNT(*) as numero_transazioni,
+                SUM(totale) as totale
+            FROM pagamenti
+            WHERE date(timestamp_pagamento) = date('now')
+            GROUP BY metodo
+            ORDER BY metodo
+        """, fetchall=True)
+    
+    @staticmethod
+    def statistiche_complete_oggi():
+        """Statistiche complete della giornata"""
+        stats = esegui_query("""
+            SELECT 
+                COUNT(*) as totale_scontrini,
+                SUM(totale) as incasso_totale,
+                AVG(totale) as media_scontrino
+            FROM pagamenti
+            WHERE date(timestamp_pagamento) = date('now')
+        """, fetchone=True)
         
-        print("✅ Database inizializzato con successo!")
-        
-        # Backup automatico solo in locale
-        if not os.environ.get('STREAMLIT_CLOUD'):
-            backup_automatico()
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Errore inizializzazione: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        if not stats:
+            return {
+                'totale_scontrini': 0,
+                'incasso_totale': 0,
+                'media_scontrino': 0
+            }
+        return stats
 
 # ============================================================================
-# BACKUP E MANUTENZIONE
-# ============================================================================
-def backup_automatico():
-    """Crea backup automatico del database (solo in locale)"""
-    try:
-        backup_dir = "backup"
-        os.makedirs(backup_dir, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join(backup_dir, f"ristorante_backup_{timestamp}.db")
-        
-        shutil.copy2(DB_PATH, backup_path)
-        print(f"✅ Backup creato: {backup_path}")
-        return backup_path
-    except Exception as e:
-        print(f"❌ Errore backup: {e}")
-        return None
-
-# ============================================================================
-# SERVIZIO STAMPANTI (solo parte essenziale)
+# SERVIZIO STAMPANTI
 # ============================================================================
 import socket
 import threading
@@ -832,6 +1120,81 @@ class StampanteService:
 
 # Avvia il worker all'avvio
 StampanteService.start_print_worker()
+
+# ============================================================================
+# BACKUP E MANUTENZIONE
+# ============================================================================
+def backup_automatico():
+    """Crea backup automatico del database (solo in locale)"""
+    try:
+        backup_dir = "backup"
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(backup_dir, f"ristorante_backup_{timestamp}.db")
+        
+        shutil.copy2(DB_PATH, backup_path)
+        print(f"✅ Backup creato: {backup_path}")
+        return backup_path
+    except Exception as e:
+        print(f"❌ Errore backup: {e}")
+        return None
+
+# ============================================================================
+# INIZIALIZZAZIONE DATABASE
+# ============================================================================
+def init_db(force=False):
+    """Inizializza il database completo"""
+    
+    print("=" * 60)
+    print("🔄 INIZIALIZZAZIONE DATABASE")
+    print("=" * 60)
+    print(f"📦 Database path: {DB_PATH}")
+    
+    try:
+        # Assicurati che la directory esista
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        
+        with get_db_connection(init_mode=True) as conn:
+            cursor = conn.cursor()
+            
+            if force:
+                cursor.execute("DROP TABLE IF EXISTS log_stampe")
+                cursor.execute("DROP TABLE IF EXISTS stampanti")
+                cursor.execute("DROP TABLE IF EXISTS notifiche")
+                cursor.execute("DROP TABLE IF EXISTS pagamenti")
+                cursor.execute("DROP TABLE IF EXISTS comandine")
+                cursor.execute("DROP TABLE IF EXISTS comande")
+                cursor.execute("DROP TABLE IF EXISTS variazioni")
+                cursor.execute("DROP TABLE IF EXISTS piatti")
+                cursor.execute("DROP TABLE IF EXISTS categorie")
+                cursor.execute("DROP TABLE IF EXISTS reparti")
+                cursor.execute("DROP TABLE IF EXISTS tavoli")
+                cursor.execute("DROP TABLE IF EXISTS sale")
+                cursor.execute("DROP TABLE IF EXISTS utenti")
+                cursor.execute("DROP TABLE IF EXISTS brand")
+                cursor.execute("DROP TABLE IF EXISTS giornale_cassa")
+                cursor.execute("DROP TABLE IF EXISTS preordini")
+                cursor.execute("DROP TABLE IF EXISTS preordini_dettaglio")
+                cursor.execute("DROP TABLE IF EXISTS clienti")
+            
+            create_tables(cursor)
+            create_indexes(cursor)
+            populate_initial_data(cursor)
+        
+        print("✅ Database inizializzato con successo!")
+        
+        # Backup automatico solo in locale
+        if not os.environ.get('STREAMLIT_CLOUD'):
+            backup_automatico()
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Errore inizializzazione: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 # ============================================================================
 # MAIN
