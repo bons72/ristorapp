@@ -8,10 +8,25 @@ import os
 import hashlib
 import platform
 import shutil
+import tempfile  # <--- IMPORTANTE: aggiunto per Streamlit Cloud
 from datetime import datetime, date
 from contextlib import contextmanager
 import logging
 from typing import Optional, Dict, List, Any, Tuple
+
+# ============================================================================
+# CONFIGURAZIONE PERCORSO DATABASE (AGGIUNTO PER STREAMLIT CLOUD)
+# ============================================================================
+def get_database_path():
+    """Restituisce il percorso corretto per il database in base all'ambiente"""
+    if os.environ.get('STREAMLIT_CLOUD'):
+        # Su Streamlit Cloud, usa la cartella temporanea (scrivibile)
+        return os.path.join(tempfile.gettempdir(), "ristorante.db")
+    else:
+        # In locale, usa la cartella corrente
+        return "ristorante.db"
+
+DB_PATH = get_database_path()
 
 # ============================================================================
 # CONFIGURAZIONE LOGGING
@@ -20,7 +35,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('ristorante.log'),
+        logging.FileHandler('ristorante.log' if not os.environ.get('STREAMLIT_CLOUD') else '/tmp/ristorante.log'),
         logging.StreamHandler()
     ]
 )
@@ -70,8 +85,9 @@ def get_db_connection(init_mode: bool = False):
         timeout = 60 if init_mode else 30
         journal_mode = "DELETE" if init_mode else "WAL"
         
+        # Usa il percorso dinamico
         conn = sqlite3.connect(
-            "ristorante.db",
+            DB_PATH,  # <--- USATO IL PERCORSO DINAMICO
             check_same_thread=False,
             timeout=timeout,
             detect_types=sqlite3.PARSE_DECLTYPES,
@@ -98,26 +114,40 @@ def get_db_connection(init_mode: bool = False):
             finally:
                 conn.close()
 
-# Funzione helper per query rapide
+# ============================================================================
+# FUNZIONE HELPER PER QUERY RAPIDE (CORRETTA)
+# ============================================================================
 def esegui_query(query: str, params: tuple = (), 
                  fetchone: bool = False, fetchall: bool = False, 
                  commit: bool = False) -> Any:
     """Esegue query SQL in modo sicuro"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        try:
-            cursor.execute(query, params)
-            if commit:
-                lastrowid = cursor.lastrowid
-                return lastrowid
-            elif fetchone:
-                return cursor.fetchone()
-            elif fetchall:
-                return cursor.fetchall()
-            return cursor
-        except sqlite3.Error as e:
-            logger.error(f"Query error: {e}\nQuery: {query[:100]}...\nParams: {params}")
-            raise
+    
+    # Usa il percorso dinamico
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = dict_factory
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute(query, params)
+        if commit:
+            conn.commit()
+            lastrowid = cursor.lastrowid
+            conn.close()
+            return lastrowid
+        elif fetchone:
+            result = cursor.fetchone()
+            conn.close()
+            return result
+        elif fetchall:
+            result = cursor.fetchall()
+            conn.close()
+            return result
+        conn.close()
+        return cursor
+    except sqlite3.Error as e:
+        conn.close()
+        logger.error(f"Query error: {e}\nQuery: {query[:100]}...\nParams: {params}")
+        raise
 
 # ============================================================================
 # CREAZIONE TABELLE
@@ -218,19 +248,19 @@ def create_tables(cursor):
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS piatti (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT UNIQUE NOT NULL,
-        categoria_id INTEGER NOT NULL,
-        descrizione_pubblica TEXT,  -- Visibile a tutti (menu)
-        descrizione_privata TEXT,   -- Ricetta segreta (solo staff)
-        prezzo REAL NOT NULL CHECK(prezzo >= 0),
-        disponibile INTEGER DEFAULT 1,
-        tempo_preparazione INTEGER DEFAULT 10,
-        foto_path TEXT DEFAULT NULL,  -- Percorso locale
-        foto_data BLOB DEFAULT NULL,  -- Per salvare direttamente nel DB
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (categoria_id) REFERENCES categorie(id) ON DELETE CASCADE
-    )
-""")
+            nome TEXT UNIQUE NOT NULL,
+            categoria_id INTEGER NOT NULL,
+            descrizione_pubblica TEXT,
+            descrizione_privata TEXT,
+            prezzo REAL NOT NULL CHECK(prezzo >= 0),
+            disponibile INTEGER DEFAULT 1,
+            tempo_preparazione INTEGER DEFAULT 10,
+            foto_path TEXT DEFAULT NULL,
+            foto_data BLOB DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (categoria_id) REFERENCES categorie(id) ON DELETE CASCADE
+        )
+    """)
     
     # 5. VARIAZIONI
     cursor.execute("""
@@ -355,6 +385,7 @@ def create_tables(cursor):
             FOREIGN KEY (operatore_chiusura_id) REFERENCES utenti(id)
         )
     """)
+    
     # 10. CONFIGURAZIONE STAMPANTI
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stampanti (
@@ -388,9 +419,7 @@ def create_tables(cursor):
             FOREIGN KEY (comanda_id) REFERENCES comande(id)
         )
     """)
-
-    logger.info("Tabelle create con successo")
-
+    
     # 12. PRE-ORDINI CLIENTI
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS preordini (
@@ -415,12 +444,29 @@ def create_tables(cursor):
             piatto_nome TEXT NOT NULL,
             qty INTEGER DEFAULT 1,
             prezzo_unitario REAL NOT NULL,
-            variazioni TEXT, -- JSON con variazioni selezionate
+            variazioni TEXT,
             note TEXT,
             FOREIGN KEY (preordine_id) REFERENCES preordini(id) ON DELETE CASCADE,
             FOREIGN KEY (piatto_id) REFERENCES piatti(id)
         )
     """)
+    
+    # 13. CLIENTI (AGGIUNTO PER LOGIN SOCIALE)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS clienti (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider_id TEXT UNIQUE,
+            provider TEXT,
+            email TEXT,
+            nome TEXT,
+            ultimo_accesso TIMESTAMP,
+            tavolo_id INTEGER,
+            ordini_totali INTEGER DEFAULT 0,
+            spesa_totale REAL DEFAULT 0
+        )
+    """)
+
+    logger.info("Tabelle create con successo")
 
 # ============================================================================
 # INDICI PER PERFORMANCE
@@ -561,443 +607,82 @@ def populate_initial_data(cursor):
     logger.info("Dati iniziali caricati con successo")
 
 # ============================================================================
-# SERVICE LAYER
+# INIZIALIZZAZIONE DATABASE
 # ============================================================================
-
-class TavoloService:
-    """Gestione tavoli e sale"""
+def init_db(force=False):
+    """Inizializza il database completo"""
     
-    @staticmethod
-    def get_tutti_tavoli():
-        """Restituisce tutti i tavoli con info sale"""
-        return esegui_query("""
-            SELECT t.*, s.nome as sala_nome, s.colore as sala_colore
-            FROM tavoli t
-            JOIN sale s ON t.sala_id = s.id
-            ORDER BY s.ordine, t.numero
-        """, fetchall=True)
+    print("=" * 60)
+    print("🔄 INIZIALIZZAZIONE DATABASE")
+    print("=" * 60)
+    print(f"📦 Database path: {DB_PATH}")
     
-    @staticmethod
-    def get_tavoli_per_sala(sala_id):
-        """Restituisce tavoli di una sala"""
-        return esegui_query("""
-            SELECT * FROM tavoli 
-            WHERE sala_id = ? 
-            ORDER BY numero
-        """, (sala_id,), fetchall=True)
-    
-    @staticmethod
-    def occupa_tavolo(tavolo_id, cameriere_id):
-        """Occupare un tavolo (crea comanda)"""
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO comande (tavolo_id, cameriere_id, stato)
-                VALUES (?, ?, 'ATTIVA')
-            """, (tavolo_id, cameriere_id))
-            comanda_id = cursor.lastrowid
-            
-            cursor.execute("""
-                UPDATE tavoli SET stato = 'OCCUPATO' WHERE id = ?
-            """, (tavolo_id,))
-            
-            return comanda_id
-    
-    @staticmethod
-    def libera_tavolo(tavolo_id):
-        """Libera un tavolo"""
-        esegui_query("""
-            UPDATE tavoli 
-            SET stato = 'LIBERO', richiesta_conto = 0
-            WHERE id = ?
-        """, (tavolo_id,), commit=True)
-
-
-class OrdineService:
-    """Gestione ordini e comande"""
-    
-    @staticmethod
-    def aggiungi_al_carrello(comanda_id, piatto_id, qty, variazioni=None, note=""):
-        """Aggiunge piatto alla comanda"""
-        piatto = esegui_query("SELECT * FROM piatti WHERE id = ?", (piatto_id,), fetchone=True)
-        if not piatto:
-            return False, "Piatto non trovato"
+    try:
+        # Assicurati che la directory esista
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         
-        # Determina reparto dalla categoria
-        reparto = esegui_query("""
-            SELECT reparto_id FROM categorie WHERE id = ?
-        """, (piatto['categoria_id'],), fetchone=True)
-        
-        esegui_query("""
-            INSERT INTO comandine 
-            (comanda_id, piatto_id, piatto_nome, qty, prezzo_unitario, 
-             note, stato, reparto_id)
-            VALUES (?, ?, ?, ?, ?, ?, 'NUOVO', ?)
-        """, (comanda_id, piatto_id, piatto['nome'], qty, piatto['prezzo'], 
-              note or "", reparto['reparto_id']), commit=True)
-        
-        return True, "Piatto aggiunto"
-    
-    @staticmethod
-    def get_comande_attive(tavolo_id):
-        """Recupera comanda attiva per tavolo"""
-        return esegui_query("""
-            SELECT * FROM comande 
-            WHERE tavolo_id = ? AND stato = 'ATTIVA'
-            LIMIT 1
-        """, (tavolo_id,), fetchone=True)
-    
-    @staticmethod
-    def get_piatti_comanda(comanda_id):
-        """Recupera tutti i piatti di una comanda"""
-        return esegui_query("""
-            SELECT c.*, p.nome as piatto_nome, r.icona as reparto_icona
-            FROM comandine c
-            JOIN piatti p ON c.piatto_id = p.id
-            JOIN reparti r ON c.reparto_id = r.id
-            WHERE c.comanda_id = ?
-            ORDER BY c.timestamp_inserimento
-        """, (comanda_id,), fetchall=True)
-    
-    @staticmethod
-    def aggiorna_stato(commandina_id, nuovo_stato, operatore_id=None):
-        """Aggiorna stato di una commandina"""
-        timestamp_field = {
-            'IN_CORSO': 'timestamp_inizio',
-            'PRONTO': 'timestamp_pronto',
-            'SERVITO': 'timestamp_servito'
-        }.get(nuovo_stato, '')
-        
-        query = f"""
-            UPDATE comandine 
-            SET stato = ?, {timestamp_field} = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """ if timestamp_field else """
-            UPDATE comandine SET stato = ? WHERE id = ?
-        """
-        
-        esegui_query(query, (nuovo_stato, commandina_id), commit=True)
-        
-        # Notifica se diventa PRONTO
-        if nuovo_stato == 'PRONTO':
-            cmd = esegui_query("""
-                SELECT c.tavolo_id, t.numero, cmd.piatto_nome
-                FROM comandine cmd
-                JOIN comande c ON cmd.comanda_id = c.id
-                JOIN tavoli t ON c.tavolo_id = t.id
-                WHERE cmd.id = ?
-            """, (commandina_id,), fetchone=True)
-            
-            if cmd:
-                NotificaService.invia(
-                    titolo=f"Tavolo {cmd['numero']}",
-                    messaggio=f"{cmd['piatto_nome']} è pronto!",
-                    destinatario_ruolo='CAMERIERE'
-                )
-    
-    @staticmethod
-    def get_comande_per_reparto(reparto_id, stato=None):
-        """Recupera comande per reparto"""
-        query = """
-            SELECT c.*, t.numero as tavolo_numero, s.nome as sala_nome
-            FROM comandine c
-            JOIN comande co ON c.comanda_id = co.id
-            JOIN tavoli t ON co.tavolo_id = t.id
-            JOIN sale s ON t.sala_id = s.id
-            WHERE c.reparto_id = ?
-        """
-        params = [reparto_id]
-        
-        if stato and stato != 'TUTTI':
-            query += " AND c.stato = ?"
-            params.append(stato)
-        
-        query += " ORDER BY c.timestamp_inserimento"
-        
-        return esegui_query(query, tuple(params), fetchall=True)
-
-
-class PagamentoService:
-    """Gestione pagamenti e conti"""
-    
-    @staticmethod
-    def richiedi_conto(tavolo_id):
-        """Il cameriere richiede il conto"""
-        comanda = esegui_query("""
-            SELECT id FROM comande 
-            WHERE tavolo_id = ? AND stato = 'ATTIVA'
-        """, (tavolo_id,), fetchone=True)
-        
-        if not comanda:
-            return False, "Nessuna comanda attiva"
-        
-        # Verifica che tutti i piatti siano serviti
-        non_serviti = esegui_query("""
-            SELECT COUNT(*) as cnt FROM comandine
-            WHERE comanda_id = ? AND stato != 'SERVITO'
-        """, (comanda['id'],), fetchone=True)
-        
-        if non_serviti['cnt'] > 0:
-            return False, f"Ancora {non_serviti['cnt']} piatti da servire"
-        
-        esegui_query("""
-            UPDATE comande SET richiesta_conto = 1,
-                timestamp_richiesta_conto = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (comanda['id'],), commit=True)
-        
-        esegui_query("""
-            UPDATE tavoli SET richiesta_conto = 1 WHERE id = ?
-        """, (tavolo_id,), commit=True)
-        
-        # Notifica la cassa
-        NotificaService.invia(
-            titolo=f"Tavolo {tavolo_id}",
-            messaggio="Richiesto conto",
-            destinatario_ruolo='CASSA'
-        )
-        
-        return True, "Conto richiesto"
-    
-    @staticmethod
-    def get_conti_richiesti():
-        """Lista tavoli che hanno richiesto il conto"""
-        return esegui_query("""
-            SELECT 
-                c.id as comanda_id,
-                t.id as tavolo_id,
-                t.numero as tavolo_numero,
-                s.nome as sala_nome,
-                SUM(cmd.qty * cmd.prezzo_unitario) as totale,
-                COUNT(cmd.id) as piatti_totali,
-                c.timestamp_richiesta_conto
-            FROM comande c
-            JOIN tavoli t ON c.tavolo_id = t.id
-            JOIN sale s ON t.sala_id = s.id
-            LEFT JOIN comandine cmd ON c.id = cmd.comanda_id
-            WHERE c.richiesta_conto = 1 AND c.stato = 'ATTIVA'
-            GROUP BY c.id
-            ORDER BY c.timestamp_richiesta_conto
-        """, fetchall=True)
-    
-    @staticmethod
-    def registra_pagamento(comanda_id, metodo, contanti=0, carta=0, 
-                          bancomat=0, altri=0, operatore_id=None):
-        """Registra pagamento e libera tavolo"""
-        with get_db_connection() as conn:
+        with get_db_connection(init_mode=True) as conn:
             cursor = conn.cursor()
             
-            # Calcola totale
-            totale = cursor.execute("""
-                SELECT SUM(qty * prezzo_unitario) as tot
-                FROM comandine WHERE comanda_id = ?
-            """, (comanda_id,)).fetchone()['tot'] or 0
+            if force:
+                cursor.execute("DROP TABLE IF EXISTS log_stampe")
+                cursor.execute("DROP TABLE IF EXISTS stampanti")
+                cursor.execute("DROP TABLE IF EXISTS notifiche")
+                cursor.execute("DROP TABLE IF EXISTS pagamenti")
+                cursor.execute("DROP TABLE IF EXISTS comandine")
+                cursor.execute("DROP TABLE IF EXISTS comande")
+                cursor.execute("DROP TABLE IF EXISTS variazioni")
+                cursor.execute("DROP TABLE IF EXISTS piatti")
+                cursor.execute("DROP TABLE IF EXISTS categorie")
+                cursor.execute("DROP TABLE IF EXISTS reparti")
+                cursor.execute("DROP TABLE IF EXISTS tavoli")
+                cursor.execute("DROP TABLE IF EXISTS sale")
+                cursor.execute("DROP TABLE IF EXISTS utenti")
+                cursor.execute("DROP TABLE IF EXISTS brand")
+                cursor.execute("DROP TABLE IF EXISTS giornale_cassa")
+                cursor.execute("DROP TABLE IF EXISTS preordini")
+                cursor.execute("DROP TABLE IF EXISTS preordini_dettaglio")
+                cursor.execute("DROP TABLE IF EXISTS clienti")
             
-            importo_totale = contanti + carta + bancomat + altri
-            resto = max(0, importo_totale - totale)
-            
-            # Registra pagamento
-            cursor.execute("""
-                INSERT INTO pagamenti 
-                (comanda_id, totale, contanti, carta, bancomat, altri, 
-                 resto, metodo, operatore_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (comanda_id, totale, contanti, carta, bancomat, altri, 
-                  resto, metodo, operatore_id))
-            
-            # Chiudi comanda
-            cursor.execute("""
-                UPDATE comande 
-                SET stato = 'CHIUSA', totale = ?, metodo_pagamento = ?,
-                    importo_pagato = ?, resto = ?, timestamp_chiusura = CURRENT_TIMESTAMP,
-                    richiesta_conto = 0
-                WHERE id = ?
-            """, (totale, metodo, importo_totale, resto, comanda_id))
-            
-            # Libera tavolo
-            cursor.execute("""
-                UPDATE tavoli 
-                SET stato = 'LIBERO', richiesta_conto = 0
-                WHERE id = (SELECT tavolo_id FROM comande WHERE id = ?)
-            """, (comanda_id,))
-            
-            return True
-
-
-class NotificaService:
-    """Gestione notifiche in tempo reale"""
-    
-    @staticmethod
-    def invia(titolo, messaggio, destinatario_id=None, destinatario_ruolo=None):
-        """Invia una notifica"""
-        esegui_query("""
-            INSERT INTO notifiche (tipo, titolo, messaggio, destinatario_id, destinatario_ruolo)
-            VALUES ('INFO', ?, ?, ?, ?)
-        """, (titolo, messaggio, destinatario_id, destinatario_ruolo), commit=True)
-    
-    @staticmethod
-    def get_non_lette(utente_id, ruolo):
-        """Recupera notifiche non lette"""
-        return esegui_query("""
-            SELECT * FROM notifiche 
-            WHERE letto = 0 AND (destinatario_id = ? OR destinatario_ruolo = ?)
-            ORDER BY timestamp_creazione DESC
-        """, (utente_id, ruolo), fetchall=True)
-    
-    @staticmethod
-    def segna_letta(notifica_id):
-        """Segna notifica come letta"""
-        esegui_query("""
-            UPDATE notifiche SET letto = 1, timestamp_lettura = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (notifica_id,), commit=True)
-
-
-class ReportService:
-    """Statistiche e report"""
-    
-    @staticmethod
-    def incasso_oggi():
-        """Incasso giornaliero"""
-        return esegui_query("""
-            SELECT COALESCE(SUM(totale), 0) as totale
-            FROM pagamenti
-            WHERE date(timestamp_pagamento) = date('now')
-        """, fetchone=True)['totale']
-    
-    @staticmethod
-    def ordini_in_corso():
-        """Numero ordini in preparazione"""
-        return esegui_query("""
-            SELECT COUNT(*) as cnt FROM comandine
-            WHERE stato IN ('NUOVO', 'IN_CORSO')
-        """, fetchone=True)['cnt']
-    
-    @staticmethod
-    def tavoli_occupati():
-        """Numero tavoli occupati"""
-        return esegui_query("""
-            SELECT COUNT(*) as cnt FROM tavoli
-            WHERE stato = 'OCCUPATO'
-        """, fetchone=True)['cnt']
-    
-    @staticmethod
-    def piatti_piu_venduti(limite=10):
-        """Top piatti più venduti"""
-        return esegui_query("""
-            SELECT piatto_nome, SUM(qty) as totale
-            FROM comandine
-            WHERE date(timestamp_inserimento) >= date('now', '-30 days')
-            GROUP BY piatto_nome
-            ORDER BY totale DESC
-            LIMIT ?
-        """, (limite,), fetchall=True)
-    
-    # ============================================================================
-    # NUOVI METODI PER STATISTICHE CASSA
-    # ============================================================================
-    
-    @staticmethod
-    def incassi_per_metodo_oggi():
-        """Incassi suddivisi per metodo di pagamento per oggi"""
-        return esegui_query("""
-            SELECT 
-                metodo,
-                COUNT(*) as numero_transazioni,
-                SUM(totale) as totale,
-                SUM(contanti) as totale_contanti,
-                SUM(carta) as totale_carta,
-                SUM(bancomat) as totale_bancomat,
-                SUM(altri) as totale_altri
-            FROM pagamenti
-            WHERE date(timestamp_pagamento) = date('now')
-            GROUP BY metodo
-            ORDER BY 
-                CASE metodo
-                    WHEN 'CONTANTI' THEN 1
-                    WHEN 'CARTA' THEN 2
-                    WHEN 'BANCOMAT' THEN 3
-                    WHEN 'MISTO' THEN 4
-                    ELSE 5
-                END
-        """, fetchall=True)
-    
-    @staticmethod
-    def incassi_per_metodo_settimana():
-        """Incassi suddivisi per metodo di pagamento per gli ultimi 7 giorni"""
-        return esegui_query("""
-            SELECT 
-                metodo,
-                COUNT(*) as numero_transazioni,
-                SUM(totale) as totale,
-                SUM(contanti) as totale_contanti,
-                SUM(carta) as totale_carta,
-                SUM(bancomat) as totale_bancomat,
-                SUM(altri) as totale_altri
-            FROM pagamenti
-            WHERE date(timestamp_pagamento) >= date('now', '-7 days')
-            GROUP BY metodo
-            ORDER BY 
-                CASE metodo
-                    WHEN 'CONTANTI' THEN 1
-                    WHEN 'CARTA' THEN 2
-                    WHEN 'BANCOMAT' THEN 3
-                    WHEN 'MISTO' THEN 4
-                    ELSE 5
-                END
-        """, fetchall=True)
-    
-    @staticmethod
-    def andamento_giornaliero_per_metodo(giorni=7):
-        """Andamento giornaliero degli incassi per metodo"""
-        return esegui_query("""
-            SELECT 
-                date(timestamp_pagamento) as giorno,
-                SUM(CASE WHEN metodo = 'CONTANTI' THEN totale ELSE 0 END) as contanti,
-                SUM(CASE WHEN metodo = 'CARTA' THEN totale ELSE 0 END) as carta,
-                SUM(CASE WHEN metodo = 'BANCOMAT' THEN totale ELSE 0 END) as bancomat,
-                SUM(CASE WHEN metodo = 'MISTO' THEN totale ELSE 0 END) as misto,
-                SUM(CASE WHEN metodo NOT IN ('CONTANTI', 'CARTA', 'BANCOMAT', 'MISTO') THEN totale ELSE 0 END) as altro,
-                SUM(totale) as totale_giorno
-            FROM pagamenti
-            WHERE date(timestamp_pagamento) >= date('now', ? || ' days')
-            GROUP BY date(timestamp_pagamento)
-            ORDER BY giorno DESC
-        """, (f'-{giorni}',), fetchall=True)
-    
-    @staticmethod
-    def statistiche_complete_oggi():
-        """Statistiche complete della giornata"""
-        stats = esegui_query("""
-            SELECT 
-                COUNT(*) as totale_scontrini,
-                SUM(totale) as incasso_totale,
-                SUM(CASE WHEN metodo = 'CONTANTI' THEN totale ELSE 0 END) as incasso_contanti,
-                SUM(CASE WHEN metodo = 'CARTA' THEN totale ELSE 0 END) as incasso_carta,
-                SUM(CASE WHEN metodo = 'BANCOMAT' THEN totale ELSE 0 END) as incasso_bancomat,
-                SUM(CASE WHEN metodo = 'MISTO' THEN totale ELSE 0 END) as incasso_misto,
-                SUM(CASE WHEN metodo NOT IN ('CONTANTI', 'CARTA', 'BANCOMAT', 'MISTO') THEN totale ELSE 0 END) as incasso_altro,
-                AVG(totale) as media_scontrino
-            FROM pagamenti
-            WHERE date(timestamp_pagamento) = date('now')
-        """, fetchone=True)
+            create_tables(cursor)
+            create_indexes(cursor)
+            populate_initial_data(cursor)
         
-        if not stats:
-            return {
-                'totale_scontrini': 0,
-                'incasso_totale': 0,
-                'incasso_contanti': 0,
-                'incasso_carta': 0,
-                'incasso_bancomat': 0,
-                'incasso_misto': 0,
-                'incasso_altro': 0,
-                'media_scontrino': 0
-            }
-        return stats
-
+        print("✅ Database inizializzato con successo!")
+        
+        # Backup automatico solo in locale
+        if not os.environ.get('STREAMLIT_CLOUD'):
+            backup_automatico()
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Errore inizializzazione: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 # ============================================================================
-# SERVIZIO STAMPANTI
+# BACKUP E MANUTENZIONE
+# ============================================================================
+def backup_automatico():
+    """Crea backup automatico del database (solo in locale)"""
+    try:
+        backup_dir = "backup"
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(backup_dir, f"ristorante_backup_{timestamp}.db")
+        
+        shutil.copy2(DB_PATH, backup_path)
+        print(f"✅ Backup creato: {backup_path}")
+        return backup_path
+    except Exception as e:
+        print(f"❌ Errore backup: {e}")
+        return None
+
+# ============================================================================
+# SERVIZIO STAMPANTI (solo parte essenziale)
 # ============================================================================
 import socket
 import threading
@@ -1007,7 +692,6 @@ import time
 class StampanteService:
     """Gestione stampanti termiche per reparti"""
     
-    # Coda per stampa asincrona
     _print_queue = queue.Queue()
     _print_thread = None
     _running = False
@@ -1033,12 +717,8 @@ class StampanteService:
         """Worker per stampa asincrona"""
         while cls._running:
             try:
-                # Prendi un lavoro dalla coda (timeout 1 secondo)
                 job = cls._print_queue.get(timeout=1)
-                
-                # Esegui la stampa
                 cls._execute_print(job)
-                
             except queue.Empty:
                 continue
             except Exception as e:
@@ -1054,324 +734,104 @@ class StampanteService:
             comanda_id = job.get('comanda_id')
             reparto_id = job.get('reparto_id')
             
-            # Prova a importare escpos (opzionale)
-            try:
-                from escpos.printer import Network, Usb, File
-                
-                # Inizializza stampante in base alla configurazione
-                if printer_config.get('indirizzo_ip'):
-                    # Stampante di rete
-                    printer = Network(
-                        printer_config['indirizzo_ip'],
-                        port=printer_config.get('porta', 9100)
-                    )
-                elif printer_config.get('usb_vendor_id') and printer_config.get('usb_product_id'):
-                    # Stampante USB
-                    printer = Usb(
-                        printer_config['usb_vendor_id'],
-                        printer_config['usb_product_id']
-                    )
-                else:
-                    # Stampante virtuale (solo log)
-                    print(f"\n🖨️ SIMULAZIONE STAMPA - {tipo}")
-                    print(content)
-                    print("-" * 40)
-                    
-                    # Log successo
-                    esegui_query("""
-                        INSERT INTO log_stampe (tipo, reparto_id, comanda_id, contenuto, esito)
-                        VALUES (?, ?, ?, ?, 'SIMULATO')
-                    """, (tipo, reparto_id, comanda_id, content[:100]), commit=True)
-                    
-                    print(f"✅ Stampato {tipo} per comanda {comanda_id} (SIMULATO)")
-                    return
-                
-                # Stampa reale
-                printer.text(content)
-                printer.cut()
-                printer.close()
-                
-            except ImportError:
-                print("⚠️ Libreria escpos non installata - stampa simulata")
-                print(f"\n🖨️ SIMULAZIONE STAMPA - {tipo}")
-                print(content)
-                print("-" * 40)
+            # Stampa simulata
+            print(f"\n🖨️ SIMULAZIONE STAMPA - {tipo}")
+            print(content)
+            print("-" * 40)
             
             # Log successo
-            esegui_query("""
-                INSERT INTO log_stampe (tipo, reparto_id, comanda_id, contenuto, esito)
-                VALUES (?, ?, ?, ?, 'SUCCESSO')
-            """, (tipo, reparto_id, comanda_id, content[:100]), commit=True)
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO log_stampe (tipo, reparto_id, comanda_id, contenuto, esito)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (tipo, reparto_id, comanda_id, content[:100], 'SIMULATO'))
+                conn.commit()
+                conn.close()
+            except:
+                pass
             
-            print(f"✅ Stampato {tipo} per comanda {comanda_id}")
+            print(f"✅ Stampato {tipo} per comanda {comanda_id} (SIMULATO)")
             
         except Exception as e:
             print(f"❌ Errore stampa: {e}")
-            # Log errore
-            try:
-                esegui_query("""
-                    INSERT INTO log_stampe (tipo, reparto_id, comanda_id, contenuto, esito)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (tipo, reparto_id, comanda_id, str(e), f'ERRORE: {str(e)}'), commit=True)
-            except:
-                pass
     
     @staticmethod
     def get_stampanti_per_reparto(reparto_id):
         """Recupera le stampanti attive per un reparto"""
-        return esegui_query("""
-            SELECT * FROM stampanti 
-            WHERE reparto_id = ? AND attivo = 1
-            ORDER BY id
-        """, (reparto_id,), fetchall=True)
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = dict_factory
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM stampanti 
+                WHERE reparto_id = ? AND attivo = 1
+                ORDER BY id
+            """, (reparto_id,))
+            result = cursor.fetchall()
+            conn.close()
+            return result
+        except:
+            return []
     
     @staticmethod
     def stampa_comanda(comanda_id, reparto_id, piatti):
         """Prepara e accoda la stampa di una comanda"""
-        
-        # Recupera info comanda
-        comanda = esegui_query("""
-            SELECT c.*, t.numero as tavolo_numero, s.nome as sala_nome
-            FROM comande c
-            JOIN tavoli t ON c.tavolo_id = t.id
-            JOIN sale s ON t.sala_id = s.id
-            WHERE c.id = ?
-        """, (comanda_id,), fetchone=True)
-        
-        if not comanda:
-            print(f"Comanda {comanda_id} non trovata")
-            return False
-        
-        # Recupera stampanti del reparto
-        stampanti = StampanteService.get_stampanti_per_reparto(reparto_id)
-        
-        if not stampanti:
-            print(f"Nessuna stampante configurata per reparto {reparto_id}")
-            return False
-        
-        # Formatta contenuto comanda
-        content = []
-        content.append("=" * 42)
-        content.append(f"  TAVOLO: {comanda['tavolo_numero']} - {comanda['sala_nome']}")
-        content.append(f"  DATA: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-        content.append("-" * 42)
-        content.append(" QTA DESCRIZIONE")
-        content.append("-" * 42)
-        
-        for p in piatti:
-            nome = p['piatto_nome'][:28] if len(p['piatto_nome']) > 28 else p['piatto_nome']
-            content.append(f" {p['qty']:2}  {nome}")
-            if p.get('note'):
-                content.append(f"     -> {p['note'][:30]}")
-        
-        content.append("-" * 42)
-        content.append("")
-        content.append("\n" * 3)  # Taglio carta
-        
-        content_str = "\n".join(content)
-        
-        # Accoda per ogni stampante del reparto
-        for stampante in stampanti:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = dict_factory
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT c.*, t.numero as tavolo_numero, s.nome as sala_nome
+                FROM comande c
+                JOIN tavoli t ON c.tavolo_id = t.id
+                JOIN sale s ON t.sala_id = s.id
+                WHERE c.id = ?
+            """, (comanda_id,))
+            comanda = cursor.fetchone()
+            conn.close()
+            
+            if not comanda:
+                return False
+            
+            content = []
+            content.append("=" * 42)
+            content.append(f"  TAVOLO: {comanda['tavolo_numero']} - {comanda['sala_nome']}")
+            content.append(f"  DATA: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+            content.append("-" * 42)
+            content.append(" QTA DESCRIZIONE")
+            content.append("-" * 42)
+            
+            for p in piatti:
+                nome = p['piatto_nome'][:28] if len(p['piatto_nome']) > 28 else p['piatto_nome']
+                content.append(f" {p['qty']:2}  {nome}")
+                if p.get('note'):
+                    content.append(f"     -> {p['note'][:30]}")
+            
+            content.append("-" * 42)
+            content.append("")
+            content.append("\n" * 3)
+            
+            content_str = "\n".join(content)
+            
             job = {
-                'printer': stampante,
+                'printer': {'nome': 'Stampante Virtuale'},
                 'content': content_str,
                 'tipo': 'COMANDA',
                 'comanda_id': comanda_id,
                 'reparto_id': reparto_id
             }
-            StampanteService._print_queue.put(job)
-        
-        return True
-    
-    @staticmethod
-    def stampa_preconto(comanda_id):
-        """Stampa il preconto per la cassa"""
-        
-        # Recupera dati comanda
-        comanda = esegui_query("""
-            SELECT c.*, t.numero as tavolo_numero, s.nome as sala_nome
-            FROM comande c
-            JOIN tavoli t ON c.tavolo_id = t.id
-            JOIN sale s ON t.sala_id = s.id
-            WHERE c.id = ?
-        """, (comanda_id,), fetchone=True)
-        
-        if not comanda:
-            return False, "Comanda non trovata"
-        
-        # Recupera piatti
-        piatti = esegui_query("""
-            SELECT piatto_nome, qty, prezzo_unitario, note
-            FROM comandine
-            WHERE comanda_id = ?
-        """, (comanda_id,), fetchall=True)
-        
-        if not piatti:
-            return False, "Nessun piatto in comanda"
-        
-        # Calcola totale
-        totale = sum(p['qty'] * p['prezzo_unitario'] for p in piatti)
-        
-        # Recupera stampante della cassa (reparto_id = 5 o speciale)
-        stampanti = StampanteService.get_stampanti_per_reparto(5)  # ID 5 = CASSA
-        
-        if not stampanti:
-            # Se non c'è stampante cassa, usa la prima disponibile
-            stampanti = esegui_query("""
-                SELECT * FROM stampanti WHERE attivo = 1 LIMIT 1
-            """, fetchall=True)
-        
-        if not stampanti:
-            print("Nessuna stampante configurata per la cassa")
-            return False, "Nessuna stampante configurata"
-        
-        # Formatta scontrino
-        content = []
-        content.append("=" * 42)
-        content.append("         PRECONTO")
-        content.append("=" * 42)
-        content.append(f"TAVOLO: {comanda['tavolo_numero']} - {comanda['sala_nome']}")
-        content.append(f"DATA: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-        content.append("-" * 42)
-        content.append(" QTA DESCRIZIONE          IMPORTO")
-        content.append("-" * 42)
-        
-        for p in piatti:
-            nome = p['piatto_nome'][:22] if len(p['piatto_nome']) > 22 else p['piatto_nome']
-            importo = p['qty'] * p['prezzo_unitario']
-            content.append(f" {p['qty']:2}  {nome:22} €{importo:7.2f}")
-            if p.get('note'):
-                content.append(f"     -> {p['note'][:30]}")
-        
-        content.append("-" * 42)
-        content.append(f"{'TOTALE:':35} €{totale:7.2f}")
-        content.append("=" * 42)
-        content.append("   *** NON FISCALE ***")
-        content.append("=" * 42)
-        content.append("\n" * 3)
-        
-        content_str = "\n".join(content)
-        
-        # Accoda stampa
-        for stampante in stampanti:
-            job = {
-                'printer': stampante,
-                'content': content_str,
-                'tipo': 'PRECONTO',
-                'comanda_id': comanda_id,
-                'reparto_id': 5  # CASSA
-            }
-            StampanteService._print_queue.put(job)
-        
-        return True, "Preconto in stampa"
-    
-    @staticmethod
-    def test_stampante(printer_id):
-        """Stampa una pagina di test"""
-        stampante = esegui_query("SELECT * FROM stampanti WHERE id = ?", (printer_id,), fetchone=True)
-        
-        if not stampante:
-            return False, "Stampante non trovata"
-        
-        content = []
-        content.append("=" * 42)
-        content.append("      PAGINA DI TEST")
-        content.append("=" * 42)
-        content.append(f"Stampante: {stampante['nome']}")
-        content.append(f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-        content.append("-" * 42)
-        content.append("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-        content.append("abcdefghijklmnopqrstuvwxyz")
-        content.append("0123456789!@#$%^&*()")
-        content.append("-" * 42)
-        content.append("€ 10,00 - € 100,00 - € 1.000,00")
-        content.append("=" * 42)
-        content.append("TEST COMPLETATO")
-        content.append("=" * 42)
-        content.append("\n" * 3)
-        
-        content_str = "\n".join(content)
-        
-        job = {
-            'printer': stampante,
-            'content': content_str,
-            'tipo': 'TEST',
-            'reparto_id': stampante['reparto_id']
-        }
-        StampanteService._print_queue.put(job)
-        
-        return True, "Test in stampa"
+            cls._print_queue.put(job)
+            
+            return True
+        except Exception as e:
+            print(f"Errore stampa_comanda: {e}")
+            return False
 
 # Avvia il worker all'avvio
 StampanteService.start_print_worker()
-
-
-# ============================================================================
-# BACKUP E MANUTENZIONE
-# ============================================================================
-def backup_automatico():
-    """Crea backup automatico del database"""
-    try:
-        backup_dir = "backup"
-        os.makedirs(backup_dir, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join(backup_dir, f"ristorante_backup_{timestamp}.db")
-        
-        shutil.copy2("ristorante.db", backup_path)
-        print(f"✅ Backup creato: {backup_path}")
-        return backup_path
-    except Exception as e:
-        print(f"❌ Errore backup: {e}")
-        return None
-
-
-# ============================================================================
-# INIZIALIZZAZIONE DATABASE
-# ============================================================================
-def init_db(force=False):
-    """Inizializza il database completo"""
-    
-    print("=" * 60)
-    print("🔄 INIZIALIZZAZIONE DATABASE")
-    print("=" * 60)
-    
-    try:
-        with get_db_connection(init_mode=True) as conn:
-            cursor = conn.cursor()
-            
-            if force:
-                cursor.execute("DROP TABLE IF EXISTS log_stampe")
-                cursor.execute("DROP TABLE IF EXISTS stampanti")
-                cursor.execute("DROP TABLE IF EXISTS notifiche")
-                cursor.execute("DROP TABLE IF EXISTS pagamenti")
-                cursor.execute("DROP TABLE IF EXISTS comandine")
-                cursor.execute("DROP TABLE IF EXISTS comande")
-                cursor.execute("DROP TABLE IF EXISTS variazioni")
-                cursor.execute("DROP TABLE IF EXISTS piatti")
-                cursor.execute("DROP TABLE IF EXISTS categorie")
-                cursor.execute("DROP TABLE IF EXISTS reparti")
-                cursor.execute("DROP TABLE IF EXISTS tavoli")
-                cursor.execute("DROP TABLE IF EXISTS sale")
-                cursor.execute("DROP TABLE IF EXISTS utenti")
-                cursor.execute("DROP TABLE IF EXISTS brand")
-                cursor.execute("DROP TABLE IF EXISTS giornale_cassa")
-            
-            create_tables(cursor)
-            create_indexes(cursor)
-            populate_initial_data(cursor)
-        
-        print("✅ Database inizializzato con successo!")
-        backup_automatico()
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Errore inizializzazione: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
 
 # ============================================================================
 # MAIN
