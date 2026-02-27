@@ -1,0 +1,22 @@
+[theme]
+# Colori personalizzati per il tema del ristorante
+primaryColor = "#d35400"        # Arancione (colore brand)
+backgroundColor = "#ffffff"      # Bianco
+secondaryBackgroundColor = "#f8f9fa"  # Grigio chiaro
+textColor = "#2c3e50"            # Blu scuro
+font = "sans serif"
+
+[server]
+# Configurazioni server
+maxUploadSize = 10               # Dimensione max upload in MB
+enableXsrfProtection = true       # Protezione CSRF
+enableCORS = true                 # Abilita CORS per accesso da telefono
+maxMessageSize = 200              # Dimensione max messaggi
+
+[browser]
+# Configurazioni browser
+gatherUsageStats = false          # Non inviare statistiche d'uso
+
+[logger]
+# Configurazioni log
+level = "error"                   # Log solo errori in produzione
