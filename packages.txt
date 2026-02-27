@@ -1,0 +1,5 @@
+# Dipendenze di sistema necessarie per SQLite e altre librerie
+sqlite3
+libsqlite3-dev
+build-essential
+python3-dev
