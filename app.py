@@ -24,11 +24,11 @@ import sys
 import traceback
 from datetime import datetime
 
-# Crea un file di log nella cartella temp
+# Crea un file di log nella cartella temp (UNA SOLA DEFINIZIONE)
 DEBUG_LOG = '/tmp/debug_ristorante.log'
 
 def write_debug(message, error=None):
-    """Scrive messaggi di debug nel file di log"""
+    """Scrive messaggi di debug nel file di log (UNA SOLA FUNZIONE)"""
     try:
         with open(DEBUG_LOG, 'a') as f:
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -54,6 +54,35 @@ write_debug(f"STREAMLIT_CLOUD env: {os.environ.get('STREAMLIT_CLOUD', 'NOT SET')
 # ============================================================================
 import tempfile
 
+# ============================================================================
+# ROUTING PRIORITARIO PER PAGINA CLIENTE (SENZA LOGIN)
+# ============================================================================
+
+# Verifica SUBITO se siamo in modalità cliente (prima di qualsiasi altra cosa)
+query_params = st.query_params
+tavolo_id = query_params.get('tavolo', [None])
+if isinstance(tavolo_id, list):
+    tavolo_id = tavolo_id[0] if tavolo_id else None
+mode = query_params.get('mode', [None])
+if isinstance(mode, list):
+    mode = mode[0] if mode else None
+
+# SE SIAMO IN MODALITÀ CLIENTE, CARICHIAMO DIRETTAMENTE LA PAGINA CLIENTE
+if tavolo_id and mode == 'cliente':
+    try:
+        write_debug("🚀 Modalità cliente rilevata, caricamento pagina cliente")
+        # Non facciamo nessun login, andiamo direttamente alla pagina cliente
+        from cliente import show_cliente_page
+        show_cliente_page()
+        st.stop()  # Ferma l'esecuzione qui - IMPORTANTE!
+    except Exception as e:
+        write_debug(f"❌ Errore nel caricamento della pagina cliente: {e}", e)
+        st.error(f"Errore nel caricamento del menu: {e}")
+        st.stop()
+
+# ============================================================================
+# INIZIALIZZAZIONE DATABASE (solo per lo staff)
+# ============================================================================
 def init_database():
     """Inizializza il database se non esiste"""
     try:
@@ -132,18 +161,24 @@ with st.sidebar.expander("🐛 DEBUG INFO", expanded=False):
         st.info("Nessun debug disponibile")
 
 # ============================================================================
-# ROUTING PER PAGINA CLIENTE
+# ROUTING PER PAGINA CLIENTE (funzione di supporto)
 # ============================================================================
 def check_cliente_mode():
     """Verifica se siamo in modalità cliente (QR code)"""
     query_params = st.query_params
-    return 'tavolo' in query_params and query_params.get('mode', [''])[0] == 'cliente'
+    tavolo = query_params.get('tavolo', None)
+    mode = query_params.get('mode', None)
+    if isinstance(tavolo, list):
+        tavolo = tavolo[0] if tavolo else None
+    if isinstance(mode, list):
+        mode = mode[0] if mode else None
+    return tavolo is not None and mode == 'cliente'
 
 # ============================================================================
-# CONFIGURAZIONE PAGINA
+# CONFIGURAZIONE PAGINA (SOLO PER LO STAFF)
 # ============================================================================
 st.set_page_config(
-    page_title="PALAZZO FIORINI",
+    page_title="PALAZZO FIORINI - Staff",
     page_icon="🍽️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -388,8 +423,6 @@ def show_sidebar():
         if st.button("🚪 LOGOUT", use_container_width=True):
             st.session_state.clear()
             st.rerun()
-
-# Continua con il resto del tuo file...
 
 # ============================================================================
 # MODULO DASHBOARD
