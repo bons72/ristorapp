@@ -18,18 +18,55 @@ import base64
 import json
 
 # ============================================================================
+# DEBUG INIZIALE - CATTURA TUTTI GLI ERRORI
+# ============================================================================
+import sys
+import traceback
+from datetime import datetime
+
+# Crea un file di log nella cartella temp
+DEBUG_LOG = '/tmp/debug_ristorante.log'
+
+def write_debug(message, error=None):
+    """Scrive messaggi di debug nel file di log"""
+    try:
+        with open(DEBUG_LOG, 'a') as f:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            f.write(f"\n[{timestamp}] {message}")
+            if error:
+                f.write(f"\nERROR: {error}")
+                f.write(f"\n{traceback.format_exc()}")
+            f.flush()
+    except:
+        pass
+
+# Log iniziale
+write_debug("=" * 60)
+write_debug("🚀 AVVIO APPLICAZIONE")
+write_debug("=" * 60)
+write_debug(f"Python version: {sys.version}")
+write_debug(f"Current directory: {os.getcwd()}")
+write_debug(f"Files in directory: {os.listdir('.')}")
+write_debug(f"STREAMLIT_CLOUD env: {os.environ.get('STREAMLIT_CLOUD', 'NOT SET')}")
+
+# ============================================================================
 # INIZIALIZZAZIONE DATABASE (PER STREAMLIT CLOUD)
 # ============================================================================
 import tempfile
 
 def init_database():
     """Inizializza il database se non esiste"""
-    from db import get_database_path, create_tables, create_indexes, populate_initial_data, get_db_connection
-    
-    db_path = get_database_path()
-    print(f"📦 Database path: {db_path}")
+    try:
+        from db import get_database_path, create_tables, create_indexes, populate_initial_data, get_db_connection
+        write_debug("✅ Import funzioni db riuscito in init_database")
+    except Exception as e:
+        write_debug("❌ ERRORE import funzioni db in init_database", e)
+        return None
     
     try:
+        db_path = get_database_path()
+        write_debug(f"📦 Database path: {db_path}")
+        
         # Verifica se il database esiste già e se ha le tabelle
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
@@ -38,41 +75,61 @@ def init_database():
         conn.close()
         
         if not table_exists:
-            print("🔄 Database non inizializzato. Creazione tabelle...")
+            write_debug("🔄 Database non inizializzato. Creazione tabelle...")
             with get_db_connection(init_mode=True) as conn:
                 cursor = conn.cursor()
                 create_tables(cursor)
                 create_indexes(cursor)
                 populate_initial_data(cursor)
-            print("✅ Database inizializzato con successo!")
+            write_debug("✅ Database inizializzato con successo!")
         else:
-            print("✅ Database già esistente e funzionante")
+            write_debug("✅ Database già esistente e funzionante")
         
         return db_path
     except Exception as e:
-        print(f"❌ Errore inizializzazione database: {e}")
-        return db_path
+        write_debug(f"❌ Errore inizializzazione database: {e}", e)
+        return None
 
 # Inizializza il database all'avvio
 db_path = init_database()
-os.environ['DB_PATH'] = db_path
+if db_path:
+    os.environ['DB_PATH'] = db_path
+    write_debug(f"✅ DB_PATH impostato a: {db_path}")
+else:
+    write_debug("❌ Inizializzazione database fallita")
 
 # ============================================================================
-# IMPORT DAL DB.PY
+# IMPORT DAL DB.PY CON GESTIONE ERRORI
 # ============================================================================
-from db import (
-    get_db_connection, esegui_query, verify_password,
-    TavoloService, OrdineService, PagamentoService,
-    NotificaService, ReportService
-)
+try:
+    from db import (
+        get_db_connection, esegui_query, verify_password,
+        TavoloService, OrdineService, PagamentoService,
+        NotificaService, ReportService
+    )
+    write_debug("✅ Import da db.py riuscito!")
+    
+    # Verifica che le classi esistano
+    write_debug(f"✅ TavoloService: {TavoloService}")
+    write_debug(f"✅ OrdineService: {OrdineService}")
+    write_debug(f"✅ PagamentoService: {PagamentoService}")
+    
+except Exception as e:
+    write_debug("❌ ERRORE IMPORT da db.py", e)
+    # Mostra l'errore anche nell'interfaccia
+    st.error(f"Errore di importazione: {e}")
+    st.stop()
 
 # ============================================================================
-# VERIFICA IMPORT
+# MOSTRA DEBUG NELL'INTERFACCIA (OPZIONALE)
 # ============================================================================
-print("🔍 Verifica importazioni...")
-print(f"✅ TavoloService: {TavoloService}")
-print(f"✅ OrdineService: {OrdineService}")
-print(f"✅ PagamentoService: {PagamentoService}")
+with st.sidebar.expander("🐛 DEBUG INFO", expanded=False):
+    try:
+        with open(DEBUG_LOG, 'r') as f:
+            debug_content = f.read()
+        st.text(debug_content[-1000:])  # Mostra ultimi 1000 caratteri
+    except:
+        st.info("Nessun debug disponibile")
 
 # ============================================================================
 # ROUTING PER PAGINA CLIENTE
@@ -198,7 +255,7 @@ def get_variazioni_per_piatto(piatto_id):
         
         return variazioni
     except Exception as e:
-        print(f"Errore in get_variazioni_per_piatto: {e}")
+        write_debug(f"Errore in get_variazioni_per_piatto: {e}", e)
         return []
 
 # ============================================================================
@@ -222,19 +279,25 @@ def show_login():
             password = st.text_input("Password", type="password", placeholder="Inserisci password")
             
             if st.form_submit_button("ACCEDI", use_container_width=True):
-                user = esegui_query(
-                    "SELECT * FROM utenti WHERE username = ? AND attivo = 1",
-                    (username,), fetchone=True
-                )
-                
-                if user and verify_password(user['password_hash'], password):
-                    st.session_state.logged_in = True
-                    st.session_state.user_id = user['id']
-                    st.session_state.username = user['username']
-                    st.session_state.user_role = user['ruolo']
-                    st.rerun()
-                else:
-                    st.error("❌ Credenziali non valide")
+                try:
+                    user = esegui_query(
+                        "SELECT * FROM utenti WHERE username = ? AND attivo = 1",
+                        (username,), fetchone=True
+                    )
+                    
+                    if user and verify_password(user['password_hash'], password):
+                        st.session_state.logged_in = True
+                        st.session_state.user_id = user['id']
+                        st.session_state.username = user['username']
+                        st.session_state.user_role = user['ruolo']
+                        write_debug(f"✅ Login riuscito: {username}")
+                        st.rerun()
+                    else:
+                        write_debug(f"❌ Login fallito: {username}")
+                        st.error("❌ Credenziali non valide")
+                except Exception as e:
+                    write_debug(f"❌ Errore durante login: {e}", e)
+                    st.error(f"Errore: {e}")
         
         st.markdown("---")
         st.caption("Utenti di test: admin/admin123, cameriere/123, cucina/123, bar/123, cassa/123")
@@ -294,21 +357,24 @@ def show_sidebar():
             ]
         
         # Notifiche non lette
-        notifiche = NotificaService.get_non_lette(
-            st.session_state.user_id,
-            st.session_state.user_role
-        )
-        
-        if notifiche:
-            st.error(f"🔔 {len(notifiche)} notifiche")
-            with st.expander("📬 Notifiche"):
-                for n in notifiche:
-                    with st.container():
-                        st.markdown(f"**{n['titolo']}**")
-                        st.caption(n['messaggio'])
-                        if st.button("✓", key=f"notifica_{n['id']}"):
-                            NotificaService.segna_letta(n['id'])
-                            st.rerun()
+        try:
+            notifiche = NotificaService.get_non_lette(
+                st.session_state.user_id,
+                st.session_state.user_role
+            )
+            
+            if notifiche:
+                st.error(f"🔔 {len(notifiche)} notifiche")
+                with st.expander("📬 Notifiche"):
+                    for n in notifiche:
+                        with st.container():
+                            st.markdown(f"**{n['titolo']}**")
+                            st.caption(n['messaggio'])
+                            if st.button("✓", key=f"notifica_{n['id']}"):
+                                NotificaService.segna_letta(n['id'])
+                                st.rerun()
+        except Exception as e:
+            write_debug(f"❌ Errore notifiche: {e}", e)
         
         # Menu principale
         for label, page in menu_items:
@@ -322,6 +388,8 @@ def show_sidebar():
         if st.button("🚪 LOGOUT", use_container_width=True):
             st.session_state.clear()
             st.rerun()
+
+# Continua con il resto del tuo file...
 
 # ============================================================================
 # MODULO DASHBOARD
