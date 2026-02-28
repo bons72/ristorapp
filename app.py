@@ -1194,24 +1194,333 @@ def show_preordini_storico():
         return
     
     for pre in preordini:
-        with st.expander(f"📅 {pre['timestamp_creazione']} - Tavolo {pre['tavolo_numero']} - {pre['stato']}"):
-            st.write(f"Stato: {pre['stato']}")
+        # Formatta la data in modo leggibile
+        if pre['timestamp_creazione']:
+            if hasattr(pre['timestamp_creazione'], 'strftime'):
+                data_ora = pre['timestamp_creazione'].strftime('%d/%m/%Y %H:%M')
+            else:
+                data_ora = str(pre['timestamp_creazione'])[:16]
+        else:
+            data_ora = 'N/A'
+            
+        with st.expander(f"📅 {data_ora} - Tavolo {pre['tavolo_numero']} - {pre['stato']}"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write(f"**Stato:** {pre['stato']}")
+                if pre.get('cameriere'):
+                    st.write(f"**Gestito da:** {pre['cameriere']}")
+                if pre.get('note'):
+                    st.write(f"**Note:** {pre['note']}")
+            
+            with col2:
+                # Recupera dettagli
+                dettagli = esegui_query("""
+                    SELECT * FROM preordini_dettaglio
+                    WHERE preordine_id = ?
+                """, (pre['id'],), fetchall=True)
+                
+                totale = sum(d['qty'] * d['prezzo_unitario'] for d in dettagli)
+                st.metric("💰 Totale", format_currency(totale))
+                st.caption(f"{len(dettagli)} piatti")
+            
+            # Mostra dettaglio piatti
+            with st.expander("📋 Dettaglio piatti", expanded=False):
+                for d in dettagli:
+                    st.caption(f"  • {d['qty']}x {d['piatto_nome']} - {format_currency(d['prezzo_unitario'] * d['qty'])}")
+                    if d.get('variazioni') and d['variazioni'] != '[]':
+                        try:
+                            var = json.loads(d['variazioni'])
+                            for v in var:
+                                st.caption(f"    ✦ {v.get('nome', '')} (+{format_currency(v.get('prezzo', 0))})")
+                        except:
+                            pass
 
 def show_revisione_preordine():
+    """Mostra dettaglio pre-ordine per revisione con possibilità di modifica"""
+    
     if 'preordine_in_revisione' not in st.session_state:
         st.info("Nessun pre-ordine selezionato")
         return
     
     pre = st.session_state.preordine_in_revisione
-    st.title(f"📋 Revisione Ordine - Tavolo {pre['tavolo_numero']}")
     
-    if st.button("⬅️ Indietro"):
-        del st.session_state.preordine_in_revisione
-        st.rerun()
+    # Gestione sicura del numero tavolo
+    tavolo_numero = pre.get('tavolo_numero', 'N/A')
+    if 'tavolo' in pre:
+        tavolo_numero = pre['tavolo'].get('numero', tavolo_numero)
     
-    st.info(f"Revisione del pre-ordine in corso...")
+    st.title(f"📋 Revisione Ordine - Tavolo {tavolo_numero}")
+    
+    # Header con info
+    col_back, col_info = st.columns([1, 3])
+    with col_back:
+        if st.button("⬅️ Indietro"):
+            del st.session_state.preordine_in_revisione
+            if 'rev_carrello' in st.session_state:
+                del st.session_state.rev_carrello
+            if 'rev_cat_selezionata' in st.session_state:
+                del st.session_state.rev_cat_selezionata
+            st.rerun()
+    
+    with col_info:
+        if pre.get('timestamp_creazione'):
+            if hasattr(pre['timestamp_creazione'], 'strftime'):
+                data_ora = pre['timestamp_creazione'].strftime('%d/%m/%Y %H:%M')
+            else:
+                data_ora = str(pre['timestamp_creazione'])[:16]
+        else:
+            data_ora = 'N/A'
+        st.caption(f"Ricevuto: {data_ora}")
+        
+        if pre.get('note'):
+            st.info(f"📝 Note cliente: {pre['note']}")
+    
+    st.divider()
+    
+    # Recupera dettagli originali
+    dettagli = esegui_query("""
+        SELECT * FROM preordini_dettaglio
+        WHERE preordine_id = ?
+    """, (pre['id'],), fetchall=True)
+    
+    # Inizializza carrello di revisione se non esiste
+    if 'rev_carrello' not in st.session_state:
+        st.session_state.rev_carrello = []
+        for d in dettagli:
+            # Parsing variazioni
+            variazioni = []
+            if d.get('variazioni') and d['variazioni'] != '[]':
+                try:
+                    variazioni = json.loads(d['variazioni'])
+                except:
+                    variazioni = []
+            
+            st.session_state.rev_carrello.append({
+                'id': d['piatto_id'],
+                'nome': d['piatto_nome'],
+                'prezzo': d['prezzo_unitario'],
+                'qty': d['qty'],
+                'variazioni': variazioni,
+                'note': d.get('note', ''),
+                'originale': True  # Flag per distinguere piatti originali
+            })
+    
+    # Layout a due colonne: menu a sinistra, carrello a destra
+    col_menu, col_carrello = st.columns([2, 1])
+    
+    with col_menu:
+        st.markdown("### 📖 Aggiungi Piatti")
+        
+        # Selezione categoria
+        categorie = esegui_query("""
+            SELECT c.*, COUNT(p.id) as num_piatti
+            FROM categorie c
+            LEFT JOIN piatti p ON c.id = p.categoria_id AND p.disponibile = 1
+            WHERE c.attiva = 1
+            GROUP BY c.id
+            ORDER BY c.ordine
+        """, fetchall=True)
+        
+        # Griglia categorie
+        cols = st.columns(3)
+        for i, cat in enumerate(categorie):
+            with cols[i % 3]:
+                if st.button(
+                    f"{cat.get('icona', '🍽️')} {cat['nome']}",
+                    key=f"rev_cat_{cat['id']}",
+                    use_container_width=True
+                ):
+                    st.session_state.rev_cat_selezionata = cat
+                    st.rerun()
+        
+        # Mostra piatti della categoria selezionata
+        if 'rev_cat_selezionata' in st.session_state:
+            cat = st.session_state.rev_cat_selezionata
+            
+            col_back_cat, col_title_cat = st.columns([1, 3])
+            with col_back_cat:
+                if st.button("⬅️ Categorie", key="back_to_rev_cats"):
+                    del st.session_state.rev_cat_selezionata
+                    st.rerun()
+            with col_title_cat:
+                st.markdown(f"### {cat.get('icona', '🍽️')} {cat['nome']}")
+            
+            # Recupera piatti
+            piatti = esegui_query("""
+                SELECT * FROM piatti
+                WHERE categoria_id = ? AND disponibile = 1
+                ORDER BY nome
+            """, (cat['id'],), fetchall=True)
+            
+            if piatti:
+                cols = st.columns(2)
+                for i, piatto in enumerate(piatti):
+                    with cols[i % 2]:
+                        with st.container(border=True):
+                            st.markdown(f"**{piatto['nome']}**")
+                            st.caption(f"💰 {format_currency(piatto['prezzo'])}")
+                            
+                            # Quantità
+                            qty = st.number_input(
+                                "Qtà",
+                                min_value=1,
+                                max_value=10,
+                                value=1,
+                                key=f"rev_qty_{piatto['id']}",
+                                label_visibility="collapsed"
+                            )
+                            
+                            # Variazioni
+                            variazioni = get_variazioni_per_piatto(piatto['id'])
+                            variazioni_selezionate = []
+                            
+                            if variazioni:
+                                with st.expander("✨ Variazioni"):
+                                    for var in variazioni:
+                                        if st.checkbox(
+                                            f"{var['nome']} (+{format_currency(var['prezzo'])})",
+                                            key=f"rev_var_{piatto['id']}_{var['id']}"
+                                        ):
+                                            variazioni_selezionate.append(var)
+                            
+                            # Bottone aggiungi
+                            if st.button("➕ Aggiungi", key=f"rev_add_{piatto['id']}"):
+                                st.session_state.rev_carrello.append({
+                                    'id': piatto['id'],
+                                    'nome': piatto['nome'],
+                                    'prezzo': piatto['prezzo'],
+                                    'qty': qty,
+                                    'variazioni': variazioni_selezionate,
+                                    'note': '',
+                                    'originale': False
+                                })
+                                st.rerun()
+    
+    with col_carrello:
+        st.markdown("### 🛒 Ordine da Revisionare")
+        
+        if not st.session_state.rev_carrello:
+            st.info("Carrello vuoto")
+        else:
+            totale = 0
+            for idx, item in enumerate(st.session_state.rev_carrello):
+                with st.container(border=True):
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    
+                    with col1:
+                        if item.get('originale'):
+                            st.markdown(f"**{item['qty']}x {item['nome']}** 📝")
+                        else:
+                            st.markdown(f"**{item['qty']}x {item['nome']}** ➕")
+                        
+                        if item.get('variazioni'):
+                            for v in item['variazioni']:
+                                st.caption(f"  ✦ {v['nome']} (+{format_currency(v['prezzo'])})")
+                        if item.get('note'):
+                            st.caption(f"📝 {item['note']}")
+                    
+                    with col2:
+                        importo = item['prezzo'] * item['qty']
+                        if item.get('variazioni'):
+                            importo += sum(v['prezzo'] * item['qty'] for v in item['variazioni'])
+                        st.markdown(f"**{format_currency(importo)}**")
+                        totale += importo
+                    
+                    with col3:
+                        if st.button("🗑️", key=f"rev_del_{idx}"):
+                            st.session_state.rev_carrello.pop(idx)
+                            st.rerun()
+            
+            st.markdown(f"### Totale: {format_currency(totale)}")
+            
+            st.divider()
+            
+            # Bottoni azione
+            col_conf, col_annulla = st.columns(2)
+            
+            with col_conf:
+                if st.button("✅ CONFERMA ORDINE", type="primary", use_container_width=True):
+                    # Crea la comanda definitiva
+                    tavolo_id = pre['tavolo_id']
+                    comanda_id = TavoloService.occupa_tavolo(tavolo_id, st.session_state.user_id)
+                    
+                    # Raccogli piatti per reparto
+                    piatti_per_reparto = {}
+                    
+                    for item in st.session_state.rev_carrello:
+                        # Calcola prezzo con variazioni
+                        prezzo_finale = item['prezzo']
+                        if item.get('variazioni'):
+                            prezzo_finale += sum(v['prezzo'] for v in item['variazioni'])
+                        
+                        # Determina reparto
+                        piatto_info = esegui_query("""
+                            SELECT c.reparto_id 
+                            FROM piatti p
+                            JOIN categorie c ON p.categoria_id = c.id
+                            WHERE p.id = ?
+                        """, (item['id'],), fetchone=True)
+                        
+                        reparto_id = piatto_info['reparto_id'] if piatto_info else 1
+                        
+                        # Salva nel database
+                        variazioni_json = json.dumps(item.get('variazioni', []))
+                        esegui_query("""
+                            INSERT INTO comandine 
+                            (comanda_id, piatto_id, piatto_nome, qty, prezzo_unitario, 
+                             note, stato, reparto_id, tempo_consegna, minuti_consegna)
+                            VALUES (?, ?, ?, ?, ?, ?, 'NUOVO', ?, ?, ?)
+                        """, (
+                            comanda_id, item['id'], item['nome'], item['qty'], prezzo_finale,
+                            variazioni_json, reparto_id, 'TEMPO2', 10
+                        ), commit=True)
+                        
+                        # Raccogli per stampa
+                        if reparto_id not in piatti_per_reparto:
+                            piatti_per_reparto[reparto_id] = []
+                        
+                        piatti_per_reparto[reparto_id].append({
+                            'piatto_nome': f"{item['nome']}" + (f" (con variazioni)" if item.get('variazioni') else ""),
+                            'qty': item['qty'],
+                            'note': variazioni_json
+                        })
+                    
+                    # Stampa automatica
+                    try:
+                        from db import StampanteService
+                        for reparto_id, piatti in piatti_per_reparto.items():
+                            StampanteService.stampa_comanda(comanda_id, reparto_id, piatti)
+                            st.success(f"🖨️ Comanda inviata al reparto {reparto_id}")
+                    except Exception as e:
+                        st.warning(f"⚠️ Stampa non disponibile: {e}")
+                    
+                    # Aggiorna stato pre-ordine
+                    esegui_query("""
+                        UPDATE preordini 
+                        SET stato = 'CONFERMATO', cameriere_id = ?, timestamp_revisione = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                    """, (st.session_state.user_id, pre['id']), commit=True)
+                    
+                    st.success("✅ Ordine confermato e inviato ai reparti!")
+                    st.balloons()
+                    del st.session_state.preordine_in_revisione
+                    del st.session_state.rev_carrello
+                    if 'rev_cat_selezionata' in st.session_state:
+                        del st.session_state.rev_cat_selezionata
+                    time.sleep(3)
+                    st.rerun()
+            
+            with col_annulla:
+                if st.button("❌ ANNULLA ORDINE", use_container_width=True):
+                    esegui_query("UPDATE preordini SET stato = 'ANNULLATO' WHERE id = ?", 
+                                (pre['id'],), commit=True)
+                    del st.session_state.preordine_in_revisione
+                    del st.session_state.rev_carrello
+                    st.rerun()
 
 def conferma_preordine(preordine_id):
+    """Converte un pre-ordine in comanda vera e propria"""
     st.success(f"Pre-ordine {preordine_id} confermato!")
     return True
 
