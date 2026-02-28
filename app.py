@@ -1170,17 +1170,16 @@ def show_preordini_stato(stato):
             with col3:
                 if stato == 'IN_ATTESA':
                     if st.button("👀 REVISIONA", key=f"rev_{pre['id']}"):
-                        # Creiamo una copia completa del dizionario per evitare problemi di referenza
-                        pre_completo = dict(pre)
-                        # Assicuriamoci che tavolo_numero sia presente (anche se lo è già)
-                        if 'tavolo_numero' not in pre_completo:
-                            pre_completo['tavolo_numero'] = 'N/A'
-                        st.session_state.preordine_in_revisione = pre_completo
+                        # Salva l'ID del pre-ordine, non l'intero oggetto
+                        st.session_state.preordine_id_da_revisionare = pre['id']
+                        st.session_state.tavolo_numero_da_revisionare = pre['tavolo_numero']
+                        st.session_state.sala_nome_da_revisionare = pre['sala_nome']
                         st.rerun()
                 elif stato == 'REVISIONATO':
                     if st.button("✅ CONFERMA", key=f"conf_{pre['id']}"):
                         conferma_preordine(pre['id'])
                         st.rerun()
+
 
 def show_preordini_storico():
     preordini = esegui_query("""
@@ -1244,38 +1243,37 @@ def show_preordini_storico():
 def show_revisione_preordine():
     """Mostra dettaglio pre-ordine per revisione con possibilità di modifica"""
     
-    # Verifica che esista in session_state
-    if 'preordine_in_revisione' not in st.session_state:
+    # Verifica che abbiamo l'ID del pre-ordine da revisionare
+    if 'preordine_id_da_revisionare' not in st.session_state:
         st.info("Nessun pre-ordine selezionato")
         return
     
-    pre = st.session_state.preordine_in_revisione
+    preordine_id = st.session_state.preordine_id_da_revisionare
+    tavolo_numero = st.session_state.get('tavolo_numero_da_revisionare', 'N/A')
+    sala_nome = st.session_state.get('sala_nome_da_revisionare', '')
     
-    # Verifica che pre sia un dizionario valido
-    if not pre or not isinstance(pre, dict):
-        st.error("Errore: dati pre-ordine non validi")
+    # Recupera i dati del pre-ordine dal database
+    pre = esegui_query("""
+        SELECT * FROM preordini WHERE id = ?
+    """, (preordine_id,), fetchone=True)
+    
+    if not pre:
+        st.error("Pre-ordine non trovato")
         # Pulisci lo stato
-        del st.session_state.preordine_in_revisione
-        if 'rev_carrello' in st.session_state:
-            del st.session_state.rev_carrello
+        del st.session_state.preordine_id_da_revisionare
+        if 'tavolo_numero_da_revisionare' in st.session_state:
+            del st.session_state.tavolo_numero_da_revisionare
         return
     
-    # Gestione sicura del numero tavolo
-    tavolo_numero = 'N/A'
-    if 'tavolo_numero' in pre:
-        tavolo_numero = pre['tavolo_numero']
-    elif 'tavolo' in pre and isinstance(pre['tavolo'], dict):
-        tavolo_numero = pre['tavolo'].get('numero', 'N/A')
-    
-    st.title(f"📋 Revisione Ordine - Tavolo {tavolo_numero}")
-    
-    # ... il resto della funzione rimane invariato ...
+    st.title(f"📋 Revisione Ordine - Tavolo {tavolo_numero} {f'- {sala_nome}' if sala_nome else ''}")
     
     # Header con info
     col_back, col_info = st.columns([1, 3])
     with col_back:
         if st.button("⬅️ Indietro"):
-            del st.session_state.preordine_in_revisione
+            del st.session_state.preordine_id_da_revisionare
+            if 'tavolo_numero_da_revisionare' in st.session_state:
+                del st.session_state.tavolo_numero_da_revisionare
             if 'rev_carrello' in st.session_state:
                 del st.session_state.rev_carrello
             if 'rev_cat_selezionata' in st.session_state:
@@ -1301,7 +1299,7 @@ def show_revisione_preordine():
     dettagli = esegui_query("""
         SELECT * FROM preordini_dettaglio
         WHERE preordine_id = ?
-    """, (pre['id'],), fetchall=True)
+    """, (preordine_id,), fetchall=True)
     
     # Inizializza carrello di revisione se non esiste
     if 'rev_carrello' not in st.session_state:
@@ -1322,8 +1320,11 @@ def show_revisione_preordine():
                 'qty': d['qty'],
                 'variazioni': variazioni,
                 'note': d.get('note', ''),
-                'originale': True  # Flag per distinguere piatti originali
+                'originale': True
             })
+    
+    # ... CONTINUA CON TUTTO IL RESTO DELLA FUNZIONE (da "Layout a due colonne" in poi)
+    # ... che è già corretta e non va modificata
     
     # Layout a due colonne: menu a sinistra, carrello a destra
     col_menu, col_carrello = st.columns([2, 1])
