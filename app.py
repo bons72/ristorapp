@@ -1121,6 +1121,70 @@ def show_ricetta_piatto(piatto_id):
 def show_preordini():
     st.title("📋 Pre-ordini Clienti")
     
+    # ============================================================================
+    # DEBUG - Verifica database
+    # ============================================================================
+    with st.expander("🔍 DEBUG DATABASE", expanded=True):
+        try:
+            # Mostra il percorso del database
+            st.write(f"📦 **Database path:** {DB_PATH}")
+            
+            # Verifica se la tabella esiste
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='preordini'")
+            if cursor.fetchone():
+                st.success("✅ Tabella 'preordini' esiste")
+                
+                # Conta i record totali
+                cursor.execute("SELECT COUNT(*) FROM preordini")
+                count = cursor.fetchone()[0]
+                st.write(f"📊 **Record totali in preordini:** {count}")
+                
+                if count > 0:
+                    # Mostra i primi 5 record
+                    cursor.execute("""
+                        SELECT p.id, p.tavolo_id, p.stato, p.timestamp_creazione, 
+                               t.numero as tavolo_numero
+                        FROM preordini p
+                        LEFT JOIN tavoli t ON p.tavolo_id = t.id
+                        ORDER BY p.id DESC LIMIT 5
+                    """)
+                    records = cursor.fetchall()
+                    
+                    st.markdown("##### Ultimi 5 pre-ordini:")
+                    for r in records:
+                        st.write(f"  • ID: {r[0]}, Tavolo: {r[4] or r[1]}, Stato: {r[2]}, Data: {r[3]}")
+                        
+                        # Mostra anche i dettagli
+                        cursor.execute("SELECT COUNT(*) FROM preordini_dettaglio WHERE preordine_id = ?", (r[0],))
+                        dettagli_count = cursor.fetchone()[0]
+                        st.write(f"    → Dettagli: {dettagli_count} piatti")
+                else:
+                    st.warning("⚠️ Nessun record trovato in 'preordini'")
+                    
+                    # Verifica se ci sono dati in altre tabelle correlate
+                    cursor.execute("SELECT COUNT(*) FROM tavoli")
+                    tavoli_count = cursor.fetchone()[0]
+                    st.write(f"   Tavoli nel database: {tavoli_count}")
+            else:
+                st.error("❌ Tabella 'preordini' NON esiste!")
+                
+                # Lista tutte le tabelle
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tabelle = cursor.fetchall()
+                st.write("Tabelle esistenti:", [t[0] for t in tabelle])
+            
+            conn.close()
+            
+        except Exception as e:
+            st.error(f"❌ Errore nel debug: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    # ============================================================================
+    # TABS principali
+    # ============================================================================
     tab_attesa, tab_revisione, tab_storico = st.tabs(["⏳ IN ATTESA", "👀 DA REVISIONARE", "📜 STORICO"])
     
     with tab_attesa:
