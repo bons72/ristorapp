@@ -1545,8 +1545,73 @@ def show_revisione_preordine():
 
 def conferma_preordine(preordine_id):
     """Converte un pre-ordine in comanda vera e propria"""
-    st.success(f"Pre-ordine {preordine_id} confermato!")
-    return True
+    
+    # Recupera il pre-ordine
+    preordine = esegui_query("SELECT * FROM preordini WHERE id = ?", (preordine_id,), fetchone=True)
+    
+    if not preordine:
+        st.error("Pre-ordine non trovato")
+        return False
+    
+    # Recupera i dettagli del pre-ordine
+    dettagli = esegui_query("SELECT * FROM preordini_dettaglio WHERE preordine_id = ?", 
+                           (preordine_id,), fetchall=True)
+    
+    if not dettagli:
+        st.error("Nessun piatto nel pre-ordine")
+        return False
+    
+    try:
+        # Crea la comanda (occupa il tavolo)
+        comanda_id = TavoloService.occupa_tavolo(preordine['tavolo_id'], st.session_state.user_id)
+        st.write(f"✅ Comanda creata con ID: {comanda_id}")  # Debug
+        
+        # Per ogni piatto, crea una commandina
+        for d in dettagli:
+            # Determina il reparto del piatto
+            piatto_info = esegui_query("""
+                SELECT c.reparto_id 
+                FROM piatti p
+                JOIN categorie c ON p.categoria_id = c.id
+                WHERE p.id = ?
+            """, (d['piatto_id'],), fetchone=True)
+            
+            reparto_id = piatto_info['reparto_id'] if piatto_info else 1
+            
+            # Gestisci variazioni
+            variazioni_json = d.get('variazioni', '')
+            
+            # Inserisci la commandina
+            esegui_query("""
+                INSERT INTO comandine 
+                (comanda_id, piatto_id, piatto_nome, qty, prezzo_unitario, 
+                 note, stato, reparto_id, tempo_consegna, minuti_consegna)
+                VALUES (?, ?, ?, ?, ?, ?, 'NUOVO', ?, 'TEMPO2', 10)
+            """, (
+                comanda_id, 
+                d['piatto_id'], 
+                d['piatto_nome'], 
+                d['qty'], 
+                d['prezzo_unitario'],
+                variazioni_json, 
+                reparto_id
+            ), commit=True)
+        
+        # Aggiorna lo stato del pre-ordine
+        esegui_query("""
+            UPDATE preordini 
+            SET stato = 'CONFERMATO', cameriere_id = ?, timestamp_revisione = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (st.session_state.user_id, preordine_id), commit=True)
+        
+        st.success(f"✅ Ordine confermato e inviato ai reparti!")
+        return True
+        
+    except Exception as e:
+        st.error(f"❌ Errore durante la conferma: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 # ============================================================================
 # MODULO CASSA
