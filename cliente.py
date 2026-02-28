@@ -24,10 +24,10 @@ def get_db_path():
 DB_PATH = get_db_path()
 
 # ============================================================================
-# FUNZIONI VELOCI PER IL MENU
+# FUNZIONI PER IL MENU E ORDINI
 # ============================================================================
 
-@st.cache_data(ttl=60)  # Cache per 60 secondi
+@st.cache_data(ttl=60)
 def get_menu_semplificato():
     """Recupera il menu in formato semplice e veloce"""
     try:
@@ -35,7 +35,6 @@ def get_menu_semplificato():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        # Query unica per tutto il menu
         cursor.execute("""
             SELECT 
                 c.id as cat_id,
@@ -52,7 +51,6 @@ def get_menu_semplificato():
             ORDER BY c.ordine, p.nome
         """)
         
-        # Organizza i dati in modo efficiente
         menu = []
         current_cat = None
         current_cat_data = None
@@ -60,7 +58,6 @@ def get_menu_semplificato():
         for row in cursor.fetchall():
             cat_id = row['cat_id']
             
-            # Nuova categoria
             if current_cat != cat_id:
                 if current_cat_data:
                     menu.append(current_cat_data)
@@ -72,17 +69,15 @@ def get_menu_semplificato():
                     'piatti': []
                 }
             
-            # Aggiungi piatto se esiste
             if row['piatto_id']:
                 current_cat_data['piatti'].append({
                     'id': row['piatto_id'],
                     'nome': row['piatto_nome'],
                     'descrizione': row['descrizione_pubblica'] or '',
                     'prezzo': row['prezzo'],
-                    'foto': bool(row['foto_data'])  # Solo per sapere se c'è foto
+                    'foto': bool(row['foto_data'])
                 })
         
-        # Aggiungi l'ultima categoria
         if current_cat_data:
             menu.append(current_cat_data)
         
@@ -94,11 +89,48 @@ def get_menu_semplificato():
         return []
 
 def format_currency(amount):
-    """Formatta importo in euro (veloce)"""
+    """Formatta importo in euro"""
     return f"€{amount:.2f}"
 
-def salva_preordine_veloce(tavolo_id, carrello, note=""):
-    """Salva pre-ordine in modo ottimizzato con verifica"""
+def get_storico_ordini(tavolo_id):
+    """Recupera lo storico degli ordini per un tavolo"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT p.*, 
+                   COUNT(d.id) as numero_piatti,
+                   SUM(d.qty * d.prezzo_unitario) as totale
+            FROM preordini p
+            LEFT JOIN preordini_dettaglio d ON p.id = d.preordine_id
+            WHERE p.tavolo_id = ?
+            GROUP BY p.id
+            ORDER BY p.timestamp_creazione DESC
+            LIMIT 10
+        """, (tavolo_id,))
+        
+        ordini = []
+        for row in cursor.fetchall():
+            ordine = dict(row)
+            # Recupera i dettagli per questo ordine
+            cursor.execute("""
+                SELECT * FROM preordini_dettaglio 
+                WHERE preordine_id = ?
+            """, (row['id'],))
+            dettagli = [dict(d) for d in cursor.fetchall()]
+            ordine['dettagli'] = dettagli
+            ordini.append(ordine)
+        
+        conn.close()
+        return ordini
+    except Exception as e:
+        print(f"❌ Errore in get_storico_ordini: {e}")
+        return []
+
+def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
+    """Salva pre-ordine con verifica e restituisce l'ID"""
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -109,9 +141,6 @@ def salva_preordine_veloce(tavolo_id, carrello, note=""):
         print("=" * 60)
         print(f"📝 SALVATAGGIO PRE-ORDINE - Tavolo: {tavolo_id}")
         print(f"   Piatti: {len(carrello)}")
-        print(f"   Note: {note}")
-        for item in carrello:
-            print(f"   - {item['qty']}x {item['nome']} @ €{item['prezzo']}")
         
         # Inserisci preordine
         cursor.execute("""
@@ -136,81 +165,57 @@ def salva_preordine_veloce(tavolo_id, carrello, note=""):
                 item['prezzo'],
                 item.get('note', '')
             ))
+            print(f"   - {item['qty']}x {item['nome']} @ €{item['prezzo']}")
         
         conn.commit()
-        print(f"✅ Pre-ordine salvato con successo!")
         
-        # VERIFICA IMMEDIATA - Controlla che il pre-ordine sia stato effettivamente salvato
-        cursor.execute("SELECT COUNT(*) as cnt FROM preordini WHERE id = ?", (preordine_id,))
-        verifica = cursor.fetchone()
-        if verifica and verifica[0] > 0:
-            print(f"✅ VERIFICA OK - Pre-ordine {preordine_id} presente nel database")
-            
-            # Controlla anche i dettagli
-            cursor.execute("SELECT COUNT(*) as cnt FROM preordini_dettaglio WHERE preordine_id = ?", (preordine_id,))
-            verifica_dettagli = cursor.fetchone()
-            print(f"✅ Dettagli salvati: {verifica_dettagli[0]} piatti")
+        # VERIFICA IMMEDIATA
+        cursor.execute("SELECT COUNT(*) FROM preordini WHERE id = ?", (preordine_id,))
+        if cursor.fetchone()[0] > 0:
+            print(f"✅ VERIFICA OK - Pre-ordine salvato")
+            cursor.execute("SELECT COUNT(*) FROM preordini_dettaglio WHERE preordine_id = ?", (preordine_id,))
+            print(f"✅ Dettagli salvati: {cursor.fetchone()[0]} piatti")
         else:
-            print(f"❌ VERIFICA FALLITA - Pre-ordine {preordine_id} NON trovato nel database!")
+            print(f"❌ VERIFICA FALLITA - Pre-ordine NON trovato!")
         
         print("=" * 60)
-        
         return preordine_id
         
     except Exception as e:
         if conn:
             conn.rollback()
-        print(f"❌ ERRORE in salva_preordine_veloce: {e}")
+        print(f"❌ ERRORE: {e}")
         traceback.print_exc()
         return None
     finally:
         if conn:
             conn.close()
 
-def debug_verifica_tabelle():
-    """Funzione di debug per verificare lo stato delle tabelle"""
+def debug_verifica_database():
+    """Verifica che tutte le tabelle necessarie esistano"""
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        print("=" * 60)
-        print("🔍 DEBUG VERIFICA TABELLE")
-        print("=" * 60)
+        tabelle_necessarie = ['preordini', 'preordini_dettaglio', 'tavoli', 'piatti']
+        risultato = {}
         
-        # Verifica tabella preordini
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='preordini'")
-        if cursor.fetchone():
-            print("✅ Tabella 'preordini' esiste")
-            cursor.execute("SELECT COUNT(*) FROM preordini")
-            count = cursor.fetchone()[0]
-            print(f"   Record in preordini: {count}")
-        else:
-            print("❌ Tabella 'preordini' NON esiste")
-        
-        # Verifica tabella preordini_dettaglio
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='preordini_dettaglio'")
-        if cursor.fetchone():
-            print("✅ Tabella 'preordini_dettaglio' esiste")
-            cursor.execute("SELECT COUNT(*) FROM preordini_dettaglio")
-            count = cursor.fetchone()[0]
-            print(f"   Record in preordini_dettaglio: {count}")
-        else:
-            print("❌ Tabella 'preordini_dettaglio' NON esiste")
+        for tabella in tabelle_necessarie:
+            cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{tabella}'")
+            risultato[tabella] = cursor.fetchone() is not None
         
         conn.close()
-        print("=" * 60)
+        return risultato
     except Exception as e:
-        print(f"❌ Errore in debug_verifica_tabelle: {e}")
+        print(f"❌ Errore verifica database: {e}")
+        return {}
 
 # ============================================================================
-# PAGINA CLIENTE VELOCE
+# PAGINA CLIENTE PRINCIPALE
 # ============================================================================
 
 def show_cliente_page():
-    """Pagina cliente super veloce e intuitiva"""
-    
-    # DEBUG - Verifica tabelle all'avvio
-    debug_verifica_tabelle()
+    """Pagina cliente con menu e storico"""
     
     # ========================================================================
     # OTTIENI TAVOLO
@@ -231,7 +236,19 @@ def show_cliente_page():
         return
     
     # ========================================================================
-    # HEADER SEMPLICE
+    # DEBUG INFO (visibile solo in sviluppo)
+    # ========================================================================
+    with st.sidebar.expander("🔧 DEBUG INFO", expanded=False):
+        st.write(f"📦 Database: {DB_PATH}")
+        tabelle = debug_verifica_database()
+        for tabella, esiste in tabelle.items():
+            if esiste:
+                st.success(f"✅ {tabella}")
+            else:
+                st.error(f"❌ {tabella}")
+    
+    # ========================================================================
+    # HEADER
     # ========================================================================
     st.markdown(f"""
         <div style='text-align: center; padding: 0.8rem; background-color: #d35400; color: white; border-radius: 0 0 10px 10px; margin-bottom: 1rem;'>
@@ -241,134 +258,174 @@ def show_cliente_page():
     """, unsafe_allow_html=True)
     
     # ========================================================================
-    # INIZIALIZZA CARRELLO (in session state)
+    # TABS: NUOVO ORDINE | STORICO
     # ========================================================================
-    if 'cliente_carrello' not in st.session_state:
-        st.session_state.cliente_carrello = []
-    if 'cliente_nota' not in st.session_state:
-        st.session_state.cliente_nota = ""
+    tab_nuovo, tab_storico = st.tabs(["📝 Nuovo Ordine", "📜 Storico Ordini"])
     
     # ========================================================================
-    # LAYOUT: MENU A SINISTRA, CARRELLO A DESTRA
+    # TAB 1: NUOVO ORDINE
     # ========================================================================
-    col_menu, col_carrello = st.columns([2, 1])
-    
-    # ========================================================================
-    # COLONNA SINISTRA - MENU
-    # ========================================================================
-    with col_menu:
-        # Carica menu (con cache)
-        menu = get_menu_semplificato()
+    with tab_nuovo:
+        # Inizializza carrello
+        if 'cliente_carrello' not in st.session_state:
+            st.session_state.cliente_carrello = []
+        if 'cliente_nota' not in st.session_state:
+            st.session_state.cliente_nota = ""
         
-        if not menu:
-            st.warning("Menu non disponibile")
-            return
+        # Layout a due colonne
+        col_menu, col_carrello = st.columns([2, 1])
         
-        # Crea tabs per le categorie (navigazione veloce)
-        categorie = [cat['nome'] for cat in menu]
-        icone = [cat['icona'] for cat in menu]
+        with col_menu:
+            menu = get_menu_semplificato()
+            
+            if not menu:
+                st.warning("Menu non disponibile")
+                st.info("Verifica che il database sia stato inizializzato correttamente")
+                return
+            
+            # Tabs per categorie
+            categorie = [cat['nome'] for cat in menu]
+            icone = [cat['icona'] for cat in menu]
+            tabs = st.tabs([f"{icona} {nome}" for icona, nome in zip(icone, categorie)])
+            
+            for idx, (tab, categoria) in enumerate(zip(tabs, menu)):
+                with tab:
+                    if not categoria['piatti']:
+                        st.info("Nessun piatto disponibile")
+                        continue
+                    
+                    for piatto in categoria['piatti']:
+                        with st.container(border=True):
+                            col1, col2 = st.columns([3, 1])
+                            
+                            with col1:
+                                st.markdown(f"**{piatto['nome']}**")
+                                if piatto['descrizione']:
+                                    st.caption(piatto['descrizione'][:60])
+                            
+                            with col2:
+                                st.markdown(f"**{format_currency(piatto['prezzo'])}**")
+                                if st.button("➕", key=f"add_{piatto['id']}_{idx}"):
+                                    st.session_state.cliente_carrello.append({
+                                        'id': piatto['id'],
+                                        'nome': piatto['nome'],
+                                        'prezzo': piatto['prezzo'],
+                                        'qty': 1,
+                                        'note': ''
+                                    })
+                                    st.rerun()
         
-        # Tabs con icone
-        tabs = st.tabs([f"{icona} {nome}" for icona, nome in zip(icone, categorie)])
-        
-        # Mostra piatti per ogni categoria
-        for idx, (tab, categoria) in enumerate(zip(tabs, menu)):
-            with tab:
-                for piatto in categoria['piatti']:
+        with col_carrello:
+            st.markdown("### 🛒 Il tuo ordine")
+            
+            if not st.session_state.cliente_carrello:
+                st.info("👆 Tocca ➕ sui piatti per iniziare")
+            else:
+                # Raggruppa piatti uguali
+                riassunto = {}
+                for item in st.session_state.cliente_carrello:
+                    key = f"{item['id']}"
+                    if key not in riassunto:
+                        riassunto[key] = item.copy()
+                    else:
+                        riassunto[key]['qty'] += item['qty']
+                
+                totale = 0
+                for key, item in riassunto.items():
                     with st.container(border=True):
-                        col1, col2 = st.columns([3, 1])
+                        col1, col2, col3 = st.columns([2, 1, 1])
                         
                         with col1:
-                            st.markdown(f"**{piatto['nome']}**")
-                            if piatto['descrizione']:
-                                st.caption(piatto['descrizione'][:60])
+                            st.markdown(f"**{item['nome']}**")
+                            st.caption(f"x{item['qty']}")
                         
                         with col2:
-                            st.markdown(f"**{format_currency(piatto['prezzo'])}**")
-                            
-                            # Pulsanti + e - (interfaccia tattile)
-                            if st.button("➕", key=f"add_{piatto['id']}"):
-                                st.session_state.cliente_carrello.append({
-                                    'id': piatto['id'],
-                                    'nome': piatto['nome'],
-                                    'prezzo': piatto['prezzo'],
-                                    'qty': 1,
-                                    'note': ''
-                                })
+                            importo = item['prezzo'] * item['qty']
+                            st.markdown(f"**{format_currency(importo)}**")
+                            totale += importo
+                        
+                        with col3:
+                            if st.button("🗑️", key=f"del_{key}"):
+                                nuovi = []
+                                for i in st.session_state.cliente_carrello:
+                                    if str(i['id']) != key:
+                                        nuovi.append(i)
+                                st.session_state.cliente_carrello = nuovi
                                 st.rerun()
+                
+                st.markdown(f"### Totale: {format_currency(totale)}")
+                
+                with st.expander("📝 Note", expanded=False):
+                    note = st.text_area(
+                        "Allergie, preferenze...",
+                        value=st.session_state.cliente_nota,
+                        key="note_input",
+                        placeholder="Es. Senza glutine, ben cotto..."
+                    )
+                    st.session_state.cliente_nota = note
+                
+                if st.button("📨 INVIA ORDINE", type="primary", use_container_width=True):
+                    if st.session_state.cliente_carrello:
+                        with st.spinner("Invio in corso..."):
+                            preordine_id = salva_preordine_con_verifica(
+                                tavolo_id,
+                                st.session_state.cliente_carrello,
+                                st.session_state.cliente_nota
+                            )
+                            
+                            if preordine_id:
+                                st.success(f"✅ Ordine #{preordine_id} inviato con successo!")
+                                st.balloons()
+                                st.session_state.cliente_carrello = []
+                                st.session_state.cliente_nota = ""
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error("❌ Errore nell'invio. Verifica il database.")
     
     # ========================================================================
-    # COLONNA DESTRA - CARRELLO
+    # TAB 2: STORICO ORDINI
     # ========================================================================
-    with col_carrello:
-        st.markdown("### 🛒 Ordine")
+    with tab_storico:
+        st.markdown("### 📜 I tuoi ordini precedenti")
         
-        if not st.session_state.cliente_carrello:
-            st.info("👆 Tocca ➕ per ordinare")
+        ordini = get_storico_ordini(tavolo_id)
+        
+        if not ordini:
+            st.info("Non hai ancora effettuato ordini")
         else:
-            # Raggruppa piatti uguali
-            carrello_riassunto = {}
-            for item in st.session_state.cliente_carrello:
-                key = f"{item['id']}_{item.get('note', '')}"
-                if key not in carrello_riassunto:
-                    carrello_riassunto[key] = item.copy()
+            for ordine in ordini:
+                # Formatta data
+                if ordine['timestamp_creazione']:
+                    if hasattr(ordine['timestamp_creazione'], 'strftime'):
+                        data_ora = ordine['timestamp_creazione'].strftime('%d/%m/%Y %H:%M')
+                    else:
+                        data_ora = str(ordine['timestamp_creazione'])[:16]
                 else:
-                    carrello_riassunto[key]['qty'] += item['qty']
-            
-            totale = 0
-            for key, item in carrello_riassunto.items():
-                with st.container(border=True):
-                    col1, col2, col3 = st.columns([2, 1, 1])
+                    data_ora = 'N/A'
+                
+                stato_emoji = {
+                    'IN_ATTESA': '⏳',
+                    'REVISIONATO': '👀',
+                    'CONFERMATO': '✅',
+                    'ANNULLATO': '❌'
+                }.get(ordine['stato'], '📋')
+                
+                with st.expander(f"{stato_emoji} Ordine del {data_ora} - {ordine['stato']}"):
+                    col1, col2 = st.columns(2)
                     
                     with col1:
-                        st.markdown(f"**{item['nome']}**")
-                        st.caption(f"x{item['qty']}")
+                        st.write(f"**Stato:** {ordine['stato']}")
+                        st.write(f"**Piatti ordinati:** {ordine['numero_piatti']}")
                     
                     with col2:
-                        importo = item['prezzo'] * item['qty']
-                        st.markdown(f"**{format_currency(importo)}**")
-                        totale += importo
+                        st.write(f"**Totale:** {format_currency(ordine['totale'])}")
                     
-                    with col3:
-                        if st.button("🗑️", key=f"del_{key}"):
-                            # Rimuove tutti gli item con quella chiave
-                            nuovi = []
-                            for i in st.session_state.cliente_carrello:
-                                k = f"{i['id']}_{i.get('note', '')}"
-                                if k != key:
-                                    nuovi.append(i)
-                            st.session_state.cliente_carrello = nuovi
-                            st.rerun()
-            
-            st.markdown(f"### Totale: {format_currency(totale)}")
-            
-            # Note (in expander per non occupare spazio)
-            with st.expander("📝 Note", expanded=False):
-                note = st.text_area(
-                    "Allergie, preferenze...",
-                    value=st.session_state.cliente_nota,
-                    key="note_input",
-                    label_visibility="collapsed",
-                    placeholder="Es. Senza glutine, ben cotto..."
-                )
-                st.session_state.cliente_nota = note
-            
-            # Bottone invio grande e visibile
-            if st.button("📨 INVIA ORDINE", type="primary", use_container_width=True):
-                if st.session_state.cliente_carrello:
-                    with st.spinner("Invio in corso..."):
-                        preordine_id = salva_preordine_veloce(
-                            tavolo_id,
-                            st.session_state.cliente_carrello,
-                            st.session_state.cliente_nota
-                        )
-                        
-                        if preordine_id:
-                            st.success("✅ Ordine inviato!")
-                            st.balloons()
-                            st.session_state.cliente_carrello = []
-                            st.session_state.cliente_nota = ""
-                            time.sleep(2)
-                            st.rerun()
-                        else:
-                            st.error("❌ Errore nell'invio. Riprova o contatta il personale.")
+                    st.markdown("##### Dettaglio piatti:")
+                    for d in ordine['dettagli']:
+                        st.markdown(f"• {d['qty']}x {d['piatto_nome']} - {format_currency(d['prezzo_unitario'] * d['qty'])}")
+                        if d.get('note'):
+                            st.caption(f"  📝 {d['note']}")
+                    
+                    if ordine.get('note'):
+                        st.info(f"📝 Note ordine: {ordine['note']}")
