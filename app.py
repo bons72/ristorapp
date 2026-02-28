@@ -1130,56 +1130,51 @@ def show_preordini():
     with tab_storico:
         show_preordini_storico()
 
-def show_preordini_stato(stato):
-    preordini = esegui_query("""
-        SELECT p.*, t.numero as tavolo_numero, s.nome as sala_nome
-        FROM preordini p
-        JOIN tavoli t ON p.tavolo_id = t.id
-        JOIN sale s ON t.sala_id = s.id
-        WHERE p.stato = ?
-        ORDER BY p.timestamp_creazione DESC
-    """, (stato,), fetchall=True)
+def show_revisione_preordine():
+    """Mostra dettaglio pre-ordine per revisione con possibilità di modifica"""
     
-    if not preordini:
-        st.info(f"Nessun pre-ordine {stato}")
+    # Verifica che abbiamo l'ID del pre-ordine da revisionare
+    if 'preordine_id_da_revisionare' not in st.session_state:
+        st.info("Nessun pre-ordine selezionato")
         return
     
-    for pre in preordini:
-        with st.container(border=True):
-            col1, col2, col3 = st.columns([2, 1, 1])
-            
-            with col1:
-                st.markdown(f"**🪑 Tavolo {pre['tavolo_numero']} - {pre['sala_nome']}**")
-                if pre['timestamp_creazione']:
-                    if hasattr(pre['timestamp_creazione'], 'strftime'):
-                        data_ora = pre['timestamp_creazione'].strftime('%d/%m/%Y %H:%M')
-                    else:
-                        data_ora = str(pre['timestamp_creazione'])[:16]
-                else:
-                    data_ora = 'N/A'
-                st.caption(f"🕐 {data_ora}")
-                if pre['note']:
-                    st.caption(f"📝 {pre['note']}")
-            
-            with col2:
-                dettagli = esegui_query("SELECT * FROM preordini_dettaglio WHERE preordine_id = ?", (pre['id'],), fetchall=True)
-                totale = sum(d['qty'] * d['prezzo_unitario'] for d in dettagli)
-                st.metric("💰 Totale", format_currency(totale))
-                st.caption(f"{len(dettagli)} piatti")
-            
-            with col3:
-                if stato == 'IN_ATTESA':
-                    if st.button("👀 REVISIONA", key=f"rev_{pre['id']}"):
-                        # Salva l'ID del pre-ordine, non l'intero oggetto
-                        st.session_state.preordine_id_da_revisionare = pre['id']
-                        st.session_state.tavolo_numero_da_revisionare = pre['tavolo_numero']
-                        st.session_state.sala_nome_da_revisionare = pre['sala_nome']
-                        st.rerun()
-                elif stato == 'REVISIONATO':
-                    if st.button("✅ CONFERMA", key=f"conf_{pre['id']}"):
-                        conferma_preordine(pre['id'])
-                        st.rerun()
-
+    preordine_id = st.session_state.preordine_id_da_revisionare
+    tavolo_numero = st.session_state.get('tavolo_numero_da_revisionare', 'N/A')
+    sala_nome = st.session_state.get('sala_nome_da_revisionare', '')
+    
+    # Recupera i dati del pre-ordine dal database
+    pre = esegui_query("""
+        SELECT * FROM preordini WHERE id = ?
+    """, (preordine_id,), fetchone=True)
+    
+    if not pre:
+        st.error("Pre-ordine non trovato")
+        # Pulisci lo stato
+        del st.session_state.preordine_id_da_revisionare
+        if 'tavolo_numero_da_revisionare' in st.session_state:
+            del st.session_state.tavolo_numero_da_revisionare
+        return
+    
+    # Recupera i dettagli originali per mostrarli
+    dettagli_originali = esegui_query("""
+        SELECT * FROM preordini_dettaglio WHERE preordine_id = ?
+    """, (preordine_id,), fetchall=True)
+    
+    # Mostra un riepilogo dell'ordine originale prima della revisione
+    with st.expander("📋 Ordine originale", expanded=True):
+        st.markdown(f"**Tavolo {tavolo_numero} {f'- {sala_nome}' if sala_nome else ''}**")
+        if pre.get('note'):
+            st.info(f"📝 Note cliente: {pre['note']}")
+        
+        for d in dettagli_originali:
+            st.markdown(f"• {d['qty']}x {d['piatto_nome']} - €{d['prezzo_unitario']:.2f} ciascuno")
+            if d.get('note'):
+                st.caption(f"  📝 {d['note']}")
+    
+    st.divider()
+    st.markdown("### ✏️ Modifica ordine")
+    
+    # ... continua con il resto della funzione (menu e carrello) ...
 
 def show_preordini_storico():
     preordini = esegui_query("""
@@ -1322,9 +1317,6 @@ def show_revisione_preordine():
                 'note': d.get('note', ''),
                 'originale': True
             })
-    
-    # ... CONTINUA CON TUTTO IL RESTO DELLA FUNZIONE (da "Layout a due colonne" in poi)
-    # ... che è già corretta e non va modificata
     
     # Layout a due colonne: menu a sinistra, carrello a destra
     col_menu, col_carrello = st.columns([2, 1])
@@ -1524,8 +1516,13 @@ def show_revisione_preordine():
                     
                     st.success("✅ Ordine confermato e inviato ai reparti!")
                     st.balloons()
-                    del st.session_state.preordine_in_revisione
-                    del st.session_state.rev_carrello
+                    # Pulisci TUTTE le variabili di sessione correlate
+                    if 'preordine_id_da_revisionare' in st.session_state:
+                        del st.session_state.preordine_id_da_revisionare
+                    if 'tavolo_numero_da_revisionare' in st.session_state:
+                        del st.session_state.tavolo_numero_da_revisionare
+                    if 'rev_carrello' in st.session_state:
+                        del st.session_state.rev_carrello
                     if 'rev_cat_selezionata' in st.session_state:
                         del st.session_state.rev_cat_selezionata
                     time.sleep(3)
@@ -1535,8 +1532,15 @@ def show_revisione_preordine():
                 if st.button("❌ ANNULLA ORDINE", use_container_width=True):
                     esegui_query("UPDATE preordini SET stato = 'ANNULLATO' WHERE id = ?", 
                                 (pre['id'],), commit=True)
-                    del st.session_state.preordine_in_revisione
-                    del st.session_state.rev_carrello
+                    # Pulisci TUTTE le variabili di sessione correlate
+                    if 'preordine_id_da_revisionare' in st.session_state:
+                        del st.session_state.preordine_id_da_revisionare
+                    if 'tavolo_numero_da_revisionare' in st.session_state:
+                        del st.session_state.tavolo_numero_da_revisionare
+                    if 'rev_carrello' in st.session_state:
+                        del st.session_state.rev_carrello
+                    if 'rev_cat_selezionata' in st.session_state:
+                        del st.session_state.rev_cat_selezionata
                     st.rerun()
 
 def conferma_preordine(preordine_id):

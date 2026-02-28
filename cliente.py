@@ -100,6 +100,11 @@ def salva_preordine_veloce(tavolo_id, carrello, note=""):
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
+        print(f"📝 SALVATAGGIO PRE-ORDINE - Tavolo: {tavolo_id}")
+        print(f"   Piatti: {len(carrello)}")
+        for item in carrello:
+            print(f"   - {item['qty']}x {item['nome']} @ €{item['prezzo']}")
+        
         # Inserisci preordine
         cursor.execute("""
             INSERT INTO preordini (tavolo_id, stato, note, timestamp_creazione)
@@ -107,8 +112,9 @@ def salva_preordine_veloce(tavolo_id, carrello, note=""):
         """, (tavolo_id, note, timestamp))
         
         preordine_id = cursor.lastrowid
+        print(f"✅ Pre-ordine ID: {preordine_id}")
         
-        # Inserisci dettagli (batch insert per velocità)
+        # Inserisci dettagli
         for item in carrello:
             cursor.execute("""
                 INSERT INTO preordini_dettaglio 
@@ -123,28 +129,16 @@ def salva_preordine_veloce(tavolo_id, carrello, note=""):
                 item.get('note', '')
             ))
         
-        # Notifica camerieri (in modo semplice)
-        try:
-            cursor.execute("""
-                INSERT INTO notifiche (tipo, titolo, messaggio, destinatario_ruolo, letto, timestamp_creazione)
-                VALUES (?, ?, ?, ?, 0, ?)
-            """, (
-                'PREORDINE',
-                f"📱 Nuovo ordine - Tavolo {tavolo_id}",
-                f"{len(carrello)} piatti - {format_currency(sum(i['prezzo']*i['qty'] for i in carrello))}",
-                'CAMERIERE',
-                timestamp
-            ))
-        except:
-            pass  # Se fallisce la notifica, ignoriamo
-        
         conn.commit()
+        print(f"✅ Pre-ordine salvato con successo!")
         return preordine_id
         
     except Exception as e:
         if conn:
             conn.rollback()
-        print(f"Errore: {e}")
+        print(f"❌ ERRORE: {e}")
+        import traceback
+        traceback.print_exc()
         return None
     finally:
         if conn:
