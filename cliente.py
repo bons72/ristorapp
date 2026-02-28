@@ -9,6 +9,7 @@ import os
 import tempfile
 from datetime import datetime
 import time
+import traceback
 
 # ============================================================================
 # CONFIGURAZIONE DATABASE (veloce)
@@ -29,70 +30,75 @@ DB_PATH = get_db_path()
 @st.cache_data(ttl=60)  # Cache per 60 secondi
 def get_menu_semplificato():
     """Recupera il menu in formato semplice e veloce"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    
-    # Query unica per tutto il menu
-    cursor.execute("""
-        SELECT 
-            c.id as cat_id,
-            c.nome as cat_nome,
-            c.icona as cat_icona,
-            p.id as piatto_id,
-            p.nome as piatto_nome,
-            p.descrizione_pubblica,
-            p.prezzo,
-            p.foto_data
-        FROM categorie c
-        LEFT JOIN piatti p ON c.id = p.categoria_id AND p.disponibile = 1
-        WHERE c.attiva = 1
-        ORDER BY c.ordine, p.nome
-    """)
-    
-    # Organizza i dati in modo efficiente
-    menu = []
-    current_cat = None
-    current_cat_data = None
-    
-    for row in cursor.fetchall():
-        cat_id = row['cat_id']
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
         
-        # Nuova categoria
-        if current_cat != cat_id:
-            if current_cat_data:
-                menu.append(current_cat_data)
-            current_cat = cat_id
-            current_cat_data = {
-                'id': cat_id,
-                'nome': row['cat_nome'],
-                'icona': row['cat_icona'] or '🍽️',
-                'piatti': []
-            }
+        # Query unica per tutto il menu
+        cursor.execute("""
+            SELECT 
+                c.id as cat_id,
+                c.nome as cat_nome,
+                c.icona as cat_icona,
+                p.id as piatto_id,
+                p.nome as piatto_nome,
+                p.descrizione_pubblica,
+                p.prezzo,
+                p.foto_data
+            FROM categorie c
+            LEFT JOIN piatti p ON c.id = p.categoria_id AND p.disponibile = 1
+            WHERE c.attiva = 1
+            ORDER BY c.ordine, p.nome
+        """)
         
-        # Aggiungi piatto se esiste
-        if row['piatto_id']:
-            current_cat_data['piatti'].append({
-                'id': row['piatto_id'],
-                'nome': row['piatto_nome'],
-                'descrizione': row['descrizione_pubblica'] or '',
-                'prezzo': row['prezzo'],
-                'foto': bool(row['foto_data'])  # Solo per sapere se c'è foto
-            })
-    
-    # Aggiungi l'ultima categoria
-    if current_cat_data:
-        menu.append(current_cat_data)
-    
-    conn.close()
-    return menu
+        # Organizza i dati in modo efficiente
+        menu = []
+        current_cat = None
+        current_cat_data = None
+        
+        for row in cursor.fetchall():
+            cat_id = row['cat_id']
+            
+            # Nuova categoria
+            if current_cat != cat_id:
+                if current_cat_data:
+                    menu.append(current_cat_data)
+                current_cat = cat_id
+                current_cat_data = {
+                    'id': cat_id,
+                    'nome': row['cat_nome'],
+                    'icona': row['cat_icona'] or '🍽️',
+                    'piatti': []
+                }
+            
+            # Aggiungi piatto se esiste
+            if row['piatto_id']:
+                current_cat_data['piatti'].append({
+                    'id': row['piatto_id'],
+                    'nome': row['piatto_nome'],
+                    'descrizione': row['descrizione_pubblica'] or '',
+                    'prezzo': row['prezzo'],
+                    'foto': bool(row['foto_data'])  # Solo per sapere se c'è foto
+                })
+        
+        # Aggiungi l'ultima categoria
+        if current_cat_data:
+            menu.append(current_cat_data)
+        
+        conn.close()
+        return menu
+    except Exception as e:
+        print(f"❌ Errore in get_menu_semplificato: {e}")
+        traceback.print_exc()
+        return []
 
 def format_currency(amount):
     """Formatta importo in euro (veloce)"""
     return f"€{amount:.2f}"
 
 def salva_preordine_veloce(tavolo_id, carrello, note=""):
-    """Salva pre-ordine in modo ottimizzato"""
+    """Salva pre-ordine in modo ottimizzato con verifica"""
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -100,8 +106,10 @@ def salva_preordine_veloce(tavolo_id, carrello, note=""):
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
+        print("=" * 60)
         print(f"📝 SALVATAGGIO PRE-ORDINE - Tavolo: {tavolo_id}")
         print(f"   Piatti: {len(carrello)}")
+        print(f"   Note: {note}")
         for item in carrello:
             print(f"   - {item['qty']}x {item['nome']} @ €{item['prezzo']}")
         
@@ -131,18 +139,68 @@ def salva_preordine_veloce(tavolo_id, carrello, note=""):
         
         conn.commit()
         print(f"✅ Pre-ordine salvato con successo!")
+        
+        # VERIFICA IMMEDIATA - Controlla che il pre-ordine sia stato effettivamente salvato
+        cursor.execute("SELECT COUNT(*) as cnt FROM preordini WHERE id = ?", (preordine_id,))
+        verifica = cursor.fetchone()
+        if verifica and verifica[0] > 0:
+            print(f"✅ VERIFICA OK - Pre-ordine {preordine_id} presente nel database")
+            
+            # Controlla anche i dettagli
+            cursor.execute("SELECT COUNT(*) as cnt FROM preordini_dettaglio WHERE preordine_id = ?", (preordine_id,))
+            verifica_dettagli = cursor.fetchone()
+            print(f"✅ Dettagli salvati: {verifica_dettagli[0]} piatti")
+        else:
+            print(f"❌ VERIFICA FALLITA - Pre-ordine {preordine_id} NON trovato nel database!")
+        
+        print("=" * 60)
+        
         return preordine_id
         
     except Exception as e:
         if conn:
             conn.rollback()
-        print(f"❌ ERRORE: {e}")
-        import traceback
+        print(f"❌ ERRORE in salva_preordine_veloce: {e}")
         traceback.print_exc()
         return None
     finally:
         if conn:
             conn.close()
+
+def debug_verifica_tabelle():
+    """Funzione di debug per verificare lo stato delle tabelle"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        print("=" * 60)
+        print("🔍 DEBUG VERIFICA TABELLE")
+        print("=" * 60)
+        
+        # Verifica tabella preordini
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='preordini'")
+        if cursor.fetchone():
+            print("✅ Tabella 'preordini' esiste")
+            cursor.execute("SELECT COUNT(*) FROM preordini")
+            count = cursor.fetchone()[0]
+            print(f"   Record in preordini: {count}")
+        else:
+            print("❌ Tabella 'preordini' NON esiste")
+        
+        # Verifica tabella preordini_dettaglio
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='preordini_dettaglio'")
+        if cursor.fetchone():
+            print("✅ Tabella 'preordini_dettaglio' esiste")
+            cursor.execute("SELECT COUNT(*) FROM preordini_dettaglio")
+            count = cursor.fetchone()[0]
+            print(f"   Record in preordini_dettaglio: {count}")
+        else:
+            print("❌ Tabella 'preordini_dettaglio' NON esiste")
+        
+        conn.close()
+        print("=" * 60)
+    except Exception as e:
+        print(f"❌ Errore in debug_verifica_tabelle: {e}")
 
 # ============================================================================
 # PAGINA CLIENTE VELOCE
@@ -150,6 +208,9 @@ def salva_preordine_veloce(tavolo_id, carrello, note=""):
 
 def show_cliente_page():
     """Pagina cliente super veloce e intuitiva"""
+    
+    # DEBUG - Verifica tabelle all'avvio
+    debug_verifica_tabelle()
     
     # ========================================================================
     # OTTIENI TAVOLO
@@ -310,4 +371,4 @@ def show_cliente_page():
                             time.sleep(2)
                             st.rerun()
                         else:
-                            st.error("❌ Errore. Riprova.")
+                            st.error("❌ Errore nell'invio. Riprova o contatta il personale.")
