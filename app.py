@@ -1170,7 +1170,12 @@ def show_preordini_stato(stato):
             with col3:
                 if stato == 'IN_ATTESA':
                     if st.button("👀 REVISIONA", key=f"rev_{pre['id']}"):
-                        st.session_state.preordine_in_revisione = pre
+                        # Creiamo una copia completa del dizionario per evitare problemi di referenza
+                        pre_completo = dict(pre)
+                        # Assicuriamoci che tavolo_numero sia presente (anche se lo è già)
+                        if 'tavolo_numero' not in pre_completo:
+                            pre_completo['tavolo_numero'] = 'N/A'
+                        st.session_state.preordine_in_revisione = pre_completo
                         st.rerun()
                 elif stato == 'REVISIONATO':
                     if st.button("✅ CONFERMA", key=f"conf_{pre['id']}"):
@@ -1239,18 +1244,32 @@ def show_preordini_storico():
 def show_revisione_preordine():
     """Mostra dettaglio pre-ordine per revisione con possibilità di modifica"""
     
+    # Verifica che esista in session_state
     if 'preordine_in_revisione' not in st.session_state:
         st.info("Nessun pre-ordine selezionato")
         return
     
     pre = st.session_state.preordine_in_revisione
     
+    # Verifica che pre sia un dizionario valido
+    if not pre or not isinstance(pre, dict):
+        st.error("Errore: dati pre-ordine non validi")
+        # Pulisci lo stato
+        del st.session_state.preordine_in_revisione
+        if 'rev_carrello' in st.session_state:
+            del st.session_state.rev_carrello
+        return
+    
     # Gestione sicura del numero tavolo
-    tavolo_numero = pre.get('tavolo_numero', 'N/A')
-    if 'tavolo' in pre:
-        tavolo_numero = pre['tavolo'].get('numero', tavolo_numero)
+    tavolo_numero = 'N/A'
+    if 'tavolo_numero' in pre:
+        tavolo_numero = pre['tavolo_numero']
+    elif 'tavolo' in pre and isinstance(pre['tavolo'], dict):
+        tavolo_numero = pre['tavolo'].get('numero', 'N/A')
     
     st.title(f"📋 Revisione Ordine - Tavolo {tavolo_numero}")
+    
+    # ... il resto della funzione rimane invariato ...
     
     # Header con info
     col_back, col_info = st.columns([1, 3])
