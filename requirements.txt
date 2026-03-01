@@ -1,3 +1,4 @@
+# PALAZZO FIORINI - Python dependencies
 streamlit
 pandas
 pillow
