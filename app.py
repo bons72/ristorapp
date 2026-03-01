@@ -16,6 +16,7 @@ from PIL import Image
 from io import BytesIO
 import base64
 import json
+from db import DB_PATH
 
 # ============================================================================
 # DEBUG INIZIALE - CATTURA TUTTI GLI ERRORI
@@ -2267,11 +2268,8 @@ def show_gestione_stampanti():
     st.subheader("🖨️ Configurazione Stampanti")
     st.info("Funzione in sviluppo")
 
-# ============================================================================
-# GENERATORE QR CODE PER TAVOLI (VERSIONE CORRETTA PER STREAMLIT CLOUD)
-# ============================================================================
 def show_qr_code_generator():
-    """Genera QR code per ogni tavolo con URL pubblico"""
+    """Genera QR code per ogni tavolo con URL permanente"""
     st.subheader("📱 QR Code per Tavoli")
     
     try:
@@ -2281,33 +2279,6 @@ def show_qr_code_generator():
         import base64
     except ImportError:
         st.error("❌ Libreria qrcode non installata. Esegui: pip install qrcode[pil]")
-        if st.button("🔄 Mostra comando installazione"):
-            st.code("pip install qrcode[pil]", language="bash")
-        return
-    
-    # Recupera tutti i tavoli
-    tavoli = TavoloService.get_tutti_tavoli()
-    
-    if not tavoli:
-        st.warning("Nessun tavolo configurato")
-        return
-    
-# ============================================================================
-# GENERATORE QR CODE PER TAVOLI (VERSIONE CON EDITOR URL)
-# ============================================================================
-def show_qr_code_generator():
-    """Genera QR code per ogni tavolo con URL modificabile"""
-    st.subheader("📱 QR Code per Tavoli")
-    
-    try:
-        import qrcode
-        from PIL import Image
-        from io import BytesIO
-        import base64
-    except ImportError:
-        st.error("❌ Libreria qrcode non installata. Esegui: pip install qrcode[pil]")
-        if st.button("🔄 Mostra comando installazione"):
-            st.code("pip install qrcode[pil]", language="bash")
         return
     
     # Recupera tutti i tavoli
@@ -2318,14 +2289,13 @@ def show_qr_code_generator():
         return
     
     # ============================================================================
-    # EDITOR URL - QUI PUOI MODIFICARE L'URL
+    # CARICA L'URL DAL DATABASE (funzioni già in db.py)
     # ============================================================================
+    from db import carica_url_pubblico, salva_url_pubblico
     
-    # Inizializza l'URL in session state se non esiste
-    if 'qr_base_url' not in st.session_state:
-        st.session_state.qr_base_url = "http://localhost:8501"
+    if 'public_url' not in st.session_state:
+        st.session_state.public_url = carica_url_pubblico()
     
-    # Crea un expander per modificare l'URL
     with st.expander("✏️ MODIFICA URL", expanded=True):
         st.markdown("""
         **Inserisci l'URL pubblico della tua app su Streamlit Cloud**
@@ -2333,22 +2303,22 @@ def show_qr_code_generator():
         Esempio: `https://bons72-ristorapp.streamlit.app`
         """)
         
-        # Campo di input per l'URL
-        nuovo_url = st.text_input(
-            "URL:",
-            value=st.session_state.qr_base_url,
-            key="url_input"
-        )
-        
-        # Bottone per salvare
-        if st.button("💾 SALVA URL"):
-            st.session_state.qr_base_url = nuovo_url.rstrip('/')
-            st.success(f"✅ URL salvato: {st.session_state.qr_base_url}")
-            st.rerun()
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            nuovo_url = st.text_input(
+                "URL:",
+                value=st.session_state.public_url,
+                key="url_input",
+                label_visibility="collapsed"
+            )
+        with col2:
+            if st.button("💾 SALVA", type="primary", use_container_width=True):
+                if salva_url_pubblico(nuovo_url):
+                    st.session_state.public_url = nuovo_url
+                    st.success("✅ URL salvato permanentemente!")
+                    st.rerun()
     
-    # URL corrente
-    base_url = st.session_state.qr_base_url
-    
+    base_url = st.session_state.public_url
     st.info(f"🔗 **URL in uso:** `{base_url}`")
     st.divider()
     
@@ -2369,7 +2339,6 @@ def show_qr_code_generator():
     
     st.divider()
     
-    # Genera QR per ogni tavolo
     for nome_sala, tavoli_sala in sale.items():
         st.markdown(f"### 🏢 {nome_sala}")
         cols = st.columns(3)
@@ -2378,11 +2347,7 @@ def show_qr_code_generator():
             with cols[i % 3]:
                 url = f"{base_url}/?tavolo={tavolo['id']}&mode=cliente"
                 
-                qr = qrcode.QRCode(
-                    version=1,
-                    box_size=box_size,
-                    border=border
-                )
+                qr = qrcode.QRCode(version=1, box_size=box_size, border=border)
                 qr.add_data(url)
                 qr.make(fit=True)
                 
