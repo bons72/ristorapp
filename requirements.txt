@@ -1,30 +1,10 @@
 # ============================================================================
-# PALAZZO FIORINI - Dipendenze Python (versione ottimizzata)
-# Versione 2.0 - Produzione
+# PALAZZO FIORINI - Dipendenze minime per test
 # ============================================================================
 
-# Framework principale
-streamlit==1.32.2
-
-# Data manipulation
+streamlit==1.28.1
 pandas==2.0.3
-numpy==1.24.3
-
-# Immagini e QR code
-Pillow==10.0.1
+Pillow==10.0.0
 qrcode[pil]==7.4.2
-
-# Autenticazione e sicurezza
-PyJWT==2.8.0
-cryptography==41.0.7
 requests==2.31.0
-
-# Grafici e visualizzazioni
-plotly==5.18.0
-
-# Report e export
-reportlab==4.0.9
-openpyxl==3.1.2
-
-# Utility Streamlit
-streamlit-autorefresh==1.0.1
+PyJWT==2.8.0
