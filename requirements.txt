@@ -1,12 +1,25 @@
 # ============================================================================
-# PALAZZO FIORINI - Dipendenze Python (versione stabile per Python 3.13)
+# PALAZZO FIORINI - Dipendenze Python (compatibili con Python 3.13)
+# Versione 2.0 - Produzione
 # ============================================================================
 
+# Framework principale (compatibile con pillow < 11)
 streamlit==1.32.2
-pandas==2.0.3
-Pillow==11.2.1        # Ultima versione compatibile con Python 3.13
+
+# Data manipulation (versioni recenti)
+pandas==2.2.3
+numpy==1.26.4
+
+# Immagini e QR code (attenzione alla versione)
+Pillow==10.4.0  # <--- VERSIONE COMPATIBILE (< 11)
 qrcode[pil]==7.4.2
+
+# Autenticazione e sicurezza
 PyJWT==2.8.0
 requests==2.31.0
-plotly==5.18.0
+
+# Grafici e visualizzazioni
+plotly==5.22.0
+
+# Utility Streamlit
 streamlit-autorefresh==1.0.1
