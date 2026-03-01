@@ -1,5 +1,5 @@
 # ============================================================================
-# PALAZZO FIORINI - Dipendenze Python (versioni bloccate)
+# PALAZZO FIORINI - Dipendenze Python (versione ottimizzata)
 # Versione 2.0 - Produzione
 # ============================================================================
 
@@ -16,10 +16,8 @@ qrcode[pil]==7.4.2
 
 # Autenticazione e sicurezza
 PyJWT==2.8.0
-bcrypt==4.0.1
 cryptography==41.0.7
 requests==2.31.0
-authlib==1.3.0
 
 # Grafici e visualizzazioni
 plotly==5.18.0
@@ -30,6 +28,3 @@ openpyxl==3.1.2
 
 # Utility Streamlit
 streamlit-autorefresh==1.0.1
-
-# Variabili d'ambiente (sviluppo)
-python-dotenv==1.0.0
