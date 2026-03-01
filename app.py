@@ -2057,7 +2057,7 @@ def show_gestione_piatti():
     elif filtro_disponibile == "Non disponibili":
         query += " AND p.disponibile = 0"
     
-    query += " ORDER BY c.ordine, p.ordine, p.nome"
+    query += " ORDER BY c.ordine, p.nome"
     
     piatti = esegui_query(query, tuple(params), fetchall=True)
     
