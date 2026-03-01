@@ -16,7 +16,16 @@ from PIL import Image
 from io import BytesIO
 import base64
 import json
-from db import DB_PATH
+
+# ============================================================================
+# CONFIGURAZIONE PAGINA (DEVE ESSERE LA PRIMA CHIAMATA STREAMLIT!)
+# ============================================================================
+st.set_page_config(
+    page_title="PALAZZO FIORINI - Staff",
+    page_icon="🍽️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ============================================================================
 # DEBUG INIZIALE - CATTURA TUTTI GLI ERRORI
@@ -80,6 +89,8 @@ if tavolo_id and mode == 'cliente':
         write_debug(f"❌ Errore nel caricamento della pagina cliente: {e}", e)
         st.error(f"Errore nel caricamento del menu: {e}")
         st.stop()
+
+# ... tutto il resto del codice rimane identico ...
 
 # ============================================================================
 # INIZIALIZZAZIONE DATABASE (solo per lo staff)
