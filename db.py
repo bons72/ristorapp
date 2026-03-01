@@ -1197,6 +1197,72 @@ def init_db(force=False):
         return False
 
 # ============================================================================
+# CONFIGURAZIONE APP - GESTIONE URL PUBBLICO
+# ============================================================================
+def salva_url_pubblico(url):
+    """Salva l'URL pubblico nel database"""
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Crea tabella config se non esiste
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS config (
+                chiave TEXT PRIMARY KEY,
+                valore TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Inserisci o aggiorna l'URL
+        cursor.execute("""
+            INSERT OR REPLACE INTO config (chiave, valore, updated_at)
+            VALUES ('public_url', ?, CURRENT_TIMESTAMP)
+        """, (url,))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"❌ Errore salvataggio URL: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def carica_url_pubblico():
+    """Carica l'URL pubblico dal database"""
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Crea tabella config se non esiste (per sicurezza)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS config (
+                chiave TEXT PRIMARY KEY,
+                valore TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        
+        # Recupera l'URL
+        cursor.execute("SELECT valore FROM config WHERE chiave = 'public_url'")
+        risultato = cursor.fetchone()
+        
+        if risultato:
+            return risultato[0]
+        else:
+            return "http://localhost:8501"
+    except Exception as e:
+        print(f"❌ Errore caricamento URL: {e}")
+        return "http://localhost:8501"
+    finally:
+        if conn:
+            conn.close()
+
+# ============================================================================
 # MAIN
 # ============================================================================
 if __name__ == "__main__":
