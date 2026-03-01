@@ -1,6 +1,6 @@
 """
 Inizializzazione database per Streamlit Cloud
-Versione 1.0 - Gestisce la creazione automatica del database
+Versione 1.1 - Gestisce la creazione automatica del database con colonna ordine
 """
 
 import sqlite3
@@ -122,7 +122,7 @@ def init_database():
             )
         """)
         
-        # 7. PIATTI
+        # 7. PIATTI (CORRETTO con colonna ordine)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS piatti (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -135,6 +135,7 @@ def init_database():
                 tempo_preparazione INTEGER DEFAULT 10,
                 foto_path TEXT DEFAULT NULL,
                 foto_data BLOB DEFAULT NULL,
+                ordine INTEGER DEFAULT 10,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (categoria_id) REFERENCES categorie(id) ON DELETE CASCADE
             )
