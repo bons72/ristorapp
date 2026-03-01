@@ -207,8 +207,24 @@ def check_cliente_mode():
         mode = mode[0] if mode else None
     return tavolo is not None and mode == 'cliente'
 
-# Auto-refresh intelligente (ogni 3 secondi)
-count = st_autorefresh(interval=3000, key="autorefresh")
+# ============================================================================
+# AUTO-REFRESH CON GESTIONE ERRORI (CORRETTO)
+# ============================================================================
+try:
+    from streamlit_autorefresh import st_autorefresh
+    count = st_autorefresh(interval=3000, key="autorefresh")
+    write_debug("✅ Auto-refresh component loaded")
+except Exception as e:
+    write_debug(f"⚠️ Auto-refresh component error: {e}")
+    # Fallback: usa timer Python
+    if 'last_refresh' not in st.session_state:
+        st.session_state.last_refresh = time.time()
+    
+    if time.time() - st.session_state.last_refresh > 3:
+        st.session_state.last_refresh = time.time()
+        st.rerun()
+    
+    st.caption("🔄 Aggiornamento automatico")
 
 # ============================================================================
 # INIZIALIZZAZIONE SESSION STATE
@@ -1811,24 +1827,140 @@ def show_stats_cassa():
 def show_amministrazione():
     st.title("⚙️ Amministrazione")
     
-    tabs = st.tabs(["👥 UTENTI", "🍽️ MENU", "🖨️ STAMPANTI", "📱 QR CODE", "🔄 BACKUP"])
+    tabs = st.tabs(["🏢 BRAND", "👥 UTENTI", "🍽️ MENU", "🖨️ STAMPANTI", "📱 QR CODE", "🔄 BACKUP"])
     
     with tabs[0]:
-        show_gestione_utenti()
+        show_gestione_brand()
     with tabs[1]:
-        show_gestione_menu()
+        show_gestione_utenti()
     with tabs[2]:
-        show_gestione_stampanti()
+        show_gestione_menu()
     with tabs[3]:
-        show_qr_code_generator()
+        show_gestione_stampanti()
     with tabs[4]:
+        show_qr_code_generator()
+    with tabs[5]:
         show_backup()
+
 
 def show_gestione_utenti():
     st.subheader("👥 Utenti")
     utenti = esegui_query("SELECT * FROM utenti ORDER BY ruolo, username", fetchall=True)
     for u in utenti:
         st.write(f"{u['nome']} {u['cognome']} - {u['ruolo']}")
+
+
+# ============================================================================
+# GESTIONE BRAND (DA AGGIUNGERE DOPO show_gestione_utenti)
+# ============================================================================
+def show_gestione_brand():
+    """Gestione del brand e logo del ristorante"""
+    st.markdown("### 🏢 Gestione Brand")
+    
+    # Recupera info brand
+    brand = esegui_query("SELECT * FROM brand WHERE id = 1", fetchone=True)
+    if not brand:
+        brand = {'nome': 'PALAZZO FIORINI', 'indirizzo': '', 'telefono': '', 'email': '', 'partita_iva': '', 'logo_data': None}
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.markdown("**📝 Informazioni Ristorante**")
+        with st.form("form_brand"):
+            nome = st.text_input("Nome Ristorante *", value=brand.get('nome', 'PALAZZO FIORINI'))
+            indirizzo = st.text_input("Indirizzo", value=brand.get('indirizzo', ''))
+            telefono = st.text_input("Telefono", value=brand.get('telefono', ''))
+            email = st.text_input("Email", value=brand.get('email', ''))
+            partita_iva = st.text_input("Partita IVA", value=brand.get('partita_iva', ''))
+            
+            st.markdown("---")
+            st.markdown("**🖼️ Logo**")
+            logo_file = st.file_uploader(
+                "Carica logo (PNG, JPG, max 2MB)",
+                type=['png', 'jpg', 'jpeg'],
+                help="Il logo apparirà nell'header della pagina cliente"
+            )
+            
+            if logo_file:
+                if logo_file.size > 2 * 1024 * 1024:
+                    st.error("File troppo grande (max 2MB)")
+                else:
+                    st.image(logo_file, width=150, caption="Anteprima logo")
+            
+            if st.form_submit_button("💾 SALVA BRAND", type="primary", use_container_width=True):
+                try:
+                    # Assicura che la tabella brand esista
+                    esegui_query("""
+                        CREATE TABLE IF NOT EXISTS brand (
+                            id INTEGER PRIMARY KEY DEFAULT 1,
+                            nome TEXT NOT NULL,
+                            indirizzo TEXT,
+                            telefono TEXT,
+                            email TEXT,
+                            partita_iva TEXT,
+                            logo_data BLOB,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """, commit=True)
+                    
+                    # Salva o aggiorna brand
+                    if logo_file:
+                        logo_data = logo_file.getvalue()
+                        esegui_query("""
+                            INSERT OR REPLACE INTO brand (id, nome, indirizzo, telefono, email, partita_iva, logo_data, updated_at)
+                            VALUES (1, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        """, (nome, indirizzo, telefono, email, partita_iva, logo_data), commit=True)
+                    else:
+                        # Verifica se il brand esiste già
+                        existing = esegui_query("SELECT * FROM brand WHERE id = 1", fetchone=True)
+                        if existing:
+                            esegui_query("""
+                                UPDATE brand SET nome = ?, indirizzo = ?, telefono = ?, email = ?, partita_iva = ?, updated_at = CURRENT_TIMESTAMP
+                                WHERE id = 1
+                            """, (nome, indirizzo, telefono, email, partita_iva), commit=True)
+                        else:
+                            esegui_query("""
+                                INSERT INTO brand (id, nome, indirizzo, telefono, email, partita_iva, updated_at)
+                                VALUES (1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                            """, (nome, indirizzo, telefono, email, partita_iva), commit=True)
+                    
+                    st.success("✅ Brand aggiornato con successo!")
+                    st.balloons()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Errore: {e}")
+    
+    with col2:
+        if brand.get('logo_data'):
+            st.markdown("**📸 Logo Attuale**")
+            st.image(brand['logo_data'], width=200)
+        else:
+            st.info("Nessun logo caricato")
+        
+        st.markdown("---")
+        st.markdown("**🔍 Anteprima Header Cliente**")
+        
+        # Anteprima dell'header come sarà visto dal cliente
+        if brand.get('logo_data'):
+            import base64
+            encoded = base64.b64encode(brand['logo_data']).decode()
+            logo_html = f'<img src="data:image/png;base64,{encoded}" style="height:35px; margin-right:10px;">'
+        else:
+            logo_html = ''
+        
+        st.markdown(f"""
+            <div style='background: linear-gradient(135deg, #d35400 0%, #e67e22 100%); padding: 0.8rem 1rem; border-radius: 10px; color: white; display: flex; align-items: center; justify-content: space-between; margin-top: 0.5rem;'>
+                <div style='display: flex; align-items: center;'>
+                    {logo_html}
+                    <span style='font-size:1.2rem; font-weight:600;'>{nome}</span>
+                </div>
+                <div style='background: rgba(255,255,255,0.2); padding: 0.2rem 1rem; border-radius: 30px; font-size:0.9rem;'>
+                    Tavolo 1
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        st.caption("Questa è l'anteprima di come apparirà l'header nella pagina cliente")
 
 # ============================================================================
 # GESTIONE MENU COMPLETO
