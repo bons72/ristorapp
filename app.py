@@ -1807,9 +1807,453 @@ def show_gestione_utenti():
     for u in utenti:
         st.write(f"{u['nome']} {u['cognome']} - {u['ruolo']}")
 
+# ============================================================================
+# GESTIONE MENU COMPLETO
+# ============================================================================
 def show_gestione_menu():
     st.subheader("🍽️ Gestione Menu")
-    st.info("Funzione in sviluppo")
+    
+    menu_tabs = st.tabs(["📁 CATEGORIE", "🍽️ PIATTI", "✨ VARIAZIONI", "🔒 RICETTE SEGRETE"])
+    
+    with menu_tabs[0]:
+        show_gestione_categorie()
+    
+    with menu_tabs[1]:
+        show_gestione_piatti()
+    
+    with menu_tabs[2]:
+        show_gestione_variazioni()
+    
+    with menu_tabs[3]:
+        show_ricette_segrete()
+
+# ============================================================================
+# GESTIONE CATEGORIE
+# ============================================================================
+def show_gestione_categorie():
+    st.markdown("### 📁 Gestione Categorie")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        with st.form("nuova_categoria"):
+            st.markdown("**➕ Nuova Categoria**")
+            
+            nome = st.text_input("Nome categoria *", placeholder="es. ANTIPASTI")
+            
+            reparti = esegui_query("SELECT * FROM reparti ORDER BY nome", fetchall=True)
+            reparto_id = st.selectbox(
+                "Reparto *",
+                options=[r['id'] for r in reparti],
+                format_func=lambda x: next(r['nome'] for r in reparti if r['id'] == x)
+            )
+            
+            icona = st.text_input("Icona", value="🍽️", placeholder="es. 🥗")
+            ordine = st.number_input("Ordine", min_value=1, value=10)
+            attiva = st.checkbox("Categoria attiva", value=True)
+            
+            if st.form_submit_button("💾 SALVA CATEGORIA", use_container_width=True):
+                if nome:
+                    try:
+                        esegui_query("""
+                            INSERT INTO categorie (nome, reparto_id, icona, ordine, attiva)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, (nome.upper(), reparto_id, icona, ordine, 1 if attiva else 0), commit=True)
+                        st.success(f"✅ Categoria '{nome}' creata!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Errore: {e}")
+                else:
+                    st.error("Il nome è obbligatorio")
+    
+    with col2:
+        st.markdown("**📋 Categorie Esistenti**")
+        
+        categorie = esegui_query("""
+            SELECT c.*, r.nome as reparto_nome 
+            FROM categorie c
+            JOIN reparti r ON c.reparto_id = r.id
+            ORDER BY c.ordine, c.nome
+        """, fetchall=True)
+        
+        if not categorie:
+            st.info("Nessuna categoria creata")
+        else:
+            for cat in categorie:
+                with st.container(border=True):
+                    cols = st.columns([3, 1, 1, 1])
+                    with cols[0]:
+                        st.markdown(f"{cat['icona']} **{cat['nome']}**")
+                        st.caption(f"📦 {cat['reparto_nome']} | Ordine: {cat['ordine']}")
+                    with cols[1]:
+                        stato = "✅ Attiva" if cat['attiva'] else "❌ Inattiva"
+                        st.markdown(stato)
+                    with cols[2]:
+                        if st.button("✏️", key=f"edit_cat_{cat['id']}"):
+                            st.session_state.edit_cat_id = cat['id']
+                            st.rerun()
+                    with cols[3]:
+                        if st.button("🗑️", key=f"del_cat_{cat['id']}"):
+                            if st.checkbox(f"Confermi?", key=f"conf_cat_{cat['id']}"):
+                                esegui_query("DELETE FROM categorie WHERE id = ?", (cat['id'],), commit=True)
+                                st.rerun()
+
+# ============================================================================
+# GESTIONE PIATTI CON IMMAGINI E RICETTE
+# ============================================================================
+def show_gestione_piatti():
+    st.markdown("### 🍽️ Gestione Piatti")
+    
+    # Filtri
+    col_f1, col_f2, col_f3 = st.columns(3)
+    with col_f1:
+        categorie = esegui_query("SELECT * FROM categorie WHERE attiva = 1 ORDER BY nome", fetchall=True)
+        cat_options = {0: "📋 TUTTE"} | {c['id']: f"{c['icona']} {c['nome']}" for c in categorie}
+        filtro_cat = st.selectbox(
+            "Filtra categoria",
+            options=list(cat_options.keys()),
+            format_func=lambda x: cat_options[x]
+        )
+    
+    with col_f2:
+        filtro_disponibile = st.selectbox(
+            "Disponibilità",
+            ["TUTTI", "Disponibili", "Non disponibili"]
+        )
+    
+    # Nuovo piatto
+    with st.expander("➕ NUOVO PIATTO", expanded=False):
+        with st.form("nuovo_piatto_form", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                nome = st.text_input("Nome piatto *", placeholder="es. Spaghetti Carbonara")
+                categoria_id = st.selectbox(
+                    "Categoria *",
+                    options=[c['id'] for c in categorie],
+                    format_func=lambda x: next(f"{c['icona']} {c['nome']}" for c in categorie if c['id'] == x)
+                )
+                prezzo = st.number_input("Prezzo (€) *", min_value=0.0, step=0.5, value=10.0)
+            
+            with col2:
+                tempo_prep = st.number_input("Tempo preparazione (min)", min_value=1, value=15)
+                disponibile = st.checkbox("Disponibile", value=True)
+                ordinamento = st.number_input("Ordine", min_value=1, value=10)
+            
+            st.divider()
+            st.markdown("##### 📖 Descrizione pubblica (visibile ai clienti)")
+            descrizione_pubblica = st.text_area(
+                "Descrizione per il menu",
+                placeholder="Ingredienti e descrizione che vedranno i clienti...",
+                height=100
+            )
+            
+            st.divider()
+            st.markdown("##### 🔒 Ricetta segreta (visibile solo a staff)")
+            st.warning("⚠️ Quest'area è visibile solo a cucina, bar e amministrazione")
+            
+            col_ric1, col_ric2 = st.columns(2)
+            with col_ric1:
+                ingredienti = st.text_area(
+                    "🥗 Ingredienti",
+                    placeholder="Elenco ingredienti con quantità...",
+                    height=150
+                )
+                preparazione = st.text_area(
+                    "👨‍🍳 Preparazione",
+                    placeholder="Passaggi per la preparazione...",
+                    height=150
+                )
+            
+            with col_ric2:
+                note_cucina = st.text_area(
+                    "📝 Note per la cucina",
+                    placeholder="Temperatura, cottura, presentazione...",
+                    height=150
+                )
+                allergeni = st.multiselect(
+                    "⚠️ Allergeni",
+                    ["Glutine", "Lattosio", "Uova", "Soia", "Frutta a guscio", "Crostacei", "Pesce", "Sedano"]
+                )
+            
+            st.divider()
+            st.markdown("##### 📸 Foto del piatto")
+            foto_file = st.file_uploader(
+                "Carica immagine (JPG, PNG, max 5MB)",
+                type=['jpg', 'jpeg', 'png'],
+                help="Seleziona una foto dal tuo computer"
+            )
+            
+            if foto_file:
+                if foto_file.size > 5 * 1024 * 1024:
+                    st.error("File troppo grande (max 5MB)")
+                else:
+                    st.image(foto_file, width=200, caption="Anteprima")
+                    st.session_state['temp_foto'] = foto_file.getvalue()
+            
+            if st.form_submit_button("💾 SALVA PIATTO", type="primary", use_container_width=True):
+                if not nome or not categoria_id:
+                    st.error("Nome e categoria sono obbligatori")
+                else:
+                    try:
+                        # Crea JSON per la ricetta
+                        ricetta_json = json.dumps({
+                            'ingredienti': ingredienti,
+                            'preparazione': preparazione,
+                            'note_cucina': note_cucina,
+                            'allergeni': allergeni
+                        })
+                        
+                        # Salva con o senza foto
+                        if 'temp_foto' in st.session_state and st.session_state['temp_foto']:
+                            esegui_query("""
+                                INSERT INTO piatti 
+                                (nome, categoria_id, prezzo, descrizione_pubblica, 
+                                 descrizione_privata, tempo_preparazione, foto_data, 
+                                 disponibile, ordine)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                nome, categoria_id, prezzo, descrizione_pubblica,
+                                ricetta_json, tempo_prep, st.session_state['temp_foto'],
+                                1 if disponibile else 0, ordinamento
+                            ), commit=True)
+                            del st.session_state['temp_foto']
+                        else:
+                            esegui_query("""
+                                INSERT INTO piatti 
+                                (nome, categoria_id, prezzo, descrizione_pubblica, 
+                                 descrizione_privata, tempo_preparazione, disponibile, ordine)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                nome, categoria_id, prezzo, descrizione_pubblica,
+                                ricetta_json, tempo_prep, 1 if disponibile else 0, ordinamento
+                            ), commit=True)
+                        
+                        st.success(f"✅ Piatto '{nome}' creato!")
+                        st.balloons()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Errore: {e}")
+    
+    # Lista piatti
+    st.divider()
+    st.markdown("##### 📋 Lista Piatti")
+    
+    # Costruisci query con filtri
+    query = """
+        SELECT p.*, c.nome as categoria_nome, c.icona as cat_icona
+        FROM piatti p
+        JOIN categorie c ON p.categoria_id = c.id
+        WHERE 1=1
+    """
+    params = []
+    
+    if filtro_cat != 0:
+        query += " AND p.categoria_id = ?"
+        params.append(filtro_cat)
+    
+    if filtro_disponibile == "Disponibili":
+        query += " AND p.disponibile = 1"
+    elif filtro_disponibile == "Non disponibili":
+        query += " AND p.disponibile = 0"
+    
+    query += " ORDER BY c.ordine, p.ordine, p.nome"
+    
+    piatti = esegui_query(query, tuple(params), fetchall=True)
+    
+    if not piatti:
+        st.info("Nessun piatto trovato")
+    else:
+        for p in piatti:
+            with st.expander(f"{p.get('cat_icona', '🍽️')} **{p['nome']}** - {format_currency(p['prezzo'])}", expanded=False):
+                col1, col2, col3 = st.columns([1, 2, 1])
+                
+                with col1:
+                    if p.get('foto_data'):
+                        st.image(p['foto_data'], width=150)
+                    else:
+                        st.image("https://via.placeholder.com/150?text=Nessuna+foto", width=150)
+                    
+                    stato = "✅ Disponibile" if p['disponibile'] else "❌ Non disponibile"
+                    st.markdown(stato)
+                    st.caption(f"Tempo: {p['tempo_preparazione']} min")
+                
+                with col2:
+                    tab_pub, tab_priv = st.tabs(["📖 Pubblico", "🔒 Privato"])
+                    
+                    with tab_pub:
+                        st.markdown("**Descrizione:**")
+                        st.write(p['descrizione_pubblica'] or "Nessuna descrizione")
+                    
+                    with tab_priv:
+                        if st.session_state.user_role in ['SUPERADMIN', 'ADMIN', 'CUCINA', 'BAR']:
+                            if p.get('descrizione_privata'):
+                                try:
+                                    ricetta = json.loads(p['descrizione_privata'])
+                                    st.markdown("**🥗 Ingredienti:**")
+                                    st.write(ricetta.get('ingredienti', 'N/A'))
+                                    st.markdown("**👨‍🍳 Preparazione:**")
+                                    st.write(ricetta.get('preparazione', 'N/A'))
+                                    st.markdown("**📝 Note cucina:**")
+                                    st.write(ricetta.get('note_cucina', 'N/A'))
+                                    if ricetta.get('allergeni'):
+                                        st.warning(f"⚠️ Allergeni: {', '.join(ricetta['allergeni'])}")
+                                except:
+                                    st.write(p['descrizione_privata'])
+                            else:
+                                st.info("Nessuna ricetta segreta")
+                        else:
+                            st.error("⛔ Accesso riservato")
+                
+                with col3:
+                    st.markdown("**Azioni**")
+                    
+                    if st.button("✏️ Modifica", key=f"edit_{p['id']}", use_container_width=True):
+                        st.session_state.edit_piatto_id = p['id']
+                        st.rerun()
+                    
+                    nuovo_stato = "❌ Disabilita" if p['disponibile'] else "✅ Abilita"
+                    if st.button(nuovo_stato, key=f"toggle_{p['id']}", use_container_width=True):
+                        esegui_query("UPDATE piatti SET disponibile = ? WHERE id = ?", 
+                                    (0 if p['disponibile'] else 1, p['id']), commit=True)
+                        st.rerun()
+                    
+                    if st.button("🗑️ Elimina", key=f"del_{p['id']}", use_container_width=True):
+                        if st.checkbox(f"Confermi?", key=f"conf_{p['id']}"):
+                            esegui_query("DELETE FROM piatti WHERE id = ?", (p['id'],), commit=True)
+                            st.rerun()
+
+# ============================================================================
+# GESTIONE VARIAZIONI
+# ============================================================================
+def show_gestione_variazioni():
+    st.markdown("### ✨ Gestione Variazioni")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        with st.form("nuova_variazione"):
+            st.markdown("**➕ Nuova Variazione**")
+            
+            nome = st.text_input("Nome *", placeholder="es. Mozzarella extra")
+            prezzo = st.number_input("Prezzo extra (€)", min_value=0.0, step=0.5, value=1.0)
+            
+            reparti = esegui_query("SELECT * FROM reparti ORDER BY nome", fetchall=True)
+            reparto_id = st.selectbox(
+                "Reparto *",
+                options=[r['id'] for r in reparti],
+                format_func=lambda x: next(r['nome'] for r in reparti if r['id'] == x)
+            )
+            
+            attivo = st.checkbox("Attiva", value=True)
+            ordine = st.number_input("Ordine", min_value=1, value=10)
+            
+            if st.form_submit_button("💾 SALVA", use_container_width=True):
+                if nome:
+                    esegui_query("""
+                        INSERT INTO variazioni (nome, prezzo, reparto_id, attivo, ordine)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (nome, prezzo, reparto_id, 1 if attivo else 0, ordine), commit=True)
+                    st.success(f"✅ Variazione '{nome}' creata!")
+                    st.rerun()
+    
+    with col2:
+        variazioni = esegui_query("""
+            SELECT v.*, r.nome as reparto_nome
+            FROM variazioni v
+            JOIN reparti r ON v.reparto_id = r.id
+            ORDER BY r.nome, v.ordine, v.nome
+        """, fetchall=True)
+        
+        if not variazioni:
+            st.info("Nessuna variazione")
+        else:
+            for v in variazioni:
+                with st.container(border=True):
+                    cols = st.columns([3, 1, 1, 1])
+                    with cols[0]:
+                        st.markdown(f"**{v['nome']}**")
+                        st.caption(f"📦 {v['reparto_nome']} | +{format_currency(v['prezzo'])}")
+                    with cols[1]:
+                        st.markdown("✅ Attiva" if v['attivo'] else "❌ Inattiva")
+                    with cols[2]:
+                        if st.button("✏️", key=f"edit_var_{v['id']}"):
+                            st.session_state.edit_var_id = v['id']
+                    with cols[3]:
+                        if st.button("🗑️", key=f"del_var_{v['id']}"):
+                            if st.checkbox(f"Confermi?", key=f"conf_var_{v['id']}"):
+                                esegui_query("DELETE FROM variazioni WHERE id = ?", (v['id'],), commit=True)
+                                st.rerun()
+
+# ============================================================================
+# RICETTE SEGRETE (VISIONE COMPLETA)
+# ============================================================================
+def show_ricette_segrete():
+    st.markdown("### 🔒 Ricette Segrete")
+    
+    if st.session_state.user_role not in ['SUPERADMIN', 'ADMIN', 'CUCINA', 'BAR']:
+        st.error("⛔ Accesso negato - Quest'area è riservata")
+        return
+    
+    # Filtro per reparto
+    reparti = esegui_query("SELECT * FROM reparti ORDER BY nome", fetchall=True)
+    filtro_reparto = st.selectbox(
+        "Filtra per reparto",
+        options=[0] + [r['id'] for r in reparti],
+        format_func=lambda x: "📋 TUTTI" if x == 0 else next(r['nome'] for r in reparti if r['id'] == x)
+    )
+    
+    # Query piatti con ricette
+    query = """
+        SELECT p.*, c.nome as categoria_nome, r.nome as reparto_nome
+        FROM piatti p
+        JOIN categorie c ON p.categoria_id = c.id
+        JOIN reparti r ON c.reparto_id = r.id
+        WHERE p.descrizione_privata IS NOT NULL AND p.descrizione_privata != ''
+    """
+    params = []
+    
+    if filtro_reparto != 0:
+        query += " AND r.id = ?"
+        params.append(filtro_reparto)
+    
+    query += " ORDER BY r.nome, c.nome, p.nome"
+    
+    piatti = esegui_query(query, tuple(params), fetchall=True)
+    
+    if not piatti:
+        st.info("Nessuna ricetta disponibile")
+    else:
+        for p in piatti:
+            with st.expander(f"🍽️ {p['nome']} - {p['reparto_nome']} / {p['categoria_nome']}"):
+                try:
+                    ricetta = json.loads(p['descrizione_privata'])
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if p.get('foto_data'):
+                            st.image(p['foto_data'], width=200)
+                        
+                        st.markdown(f"**💰 Prezzo:** {format_currency(p['prezzo'])}")
+                        st.markdown(f"**⏱️ Tempo:** {p['tempo_preparazione']} min")
+                    
+                    with col2:
+                        st.markdown("**🥗 Ingredienti:**")
+                        st.write(ricetta.get('ingredienti', 'N/A'))
+                    
+                    st.divider()
+                    st.markdown("**👨‍🍳 Preparazione:**")
+                    st.write(ricetta.get('preparazione', 'N/A'))
+                    
+                    st.markdown("**📝 Note cucina:**")
+                    st.write(ricetta.get('note_cucina', 'N/A'))
+                    
+                    if ricetta.get('allergeni'):
+                        st.warning(f"⚠️ Allergeni: {', '.join(ricetta['allergeni'])}")
+                        
+                except Exception as e:
+                    st.error(f"Errore nel leggere la ricetta: {e}")
 
 def show_backup():
     st.subheader("💾 Backup")
