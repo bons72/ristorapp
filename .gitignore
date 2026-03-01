@@ -1,93 +1,49 @@
-# Database
-*.db
-*.sqlite
-*.sqlite3
-ristorante.db
-
-# File di log
-*.log
-ristorante.log
-
-# Cartella backup
-backup/
-backups/
-
-# Python cache
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Ambiente virtuale
-venv/
+*.py[cod]
+*$py.class
+*.so
+.Python
 env/
-.env
-.venv/
+venv/
 ENV/
 env.bak/
 venv.bak/
+pythonenv*
+
+# Database locale
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.log
+
+# Backup
+backup/
+*.backup
+*.bak
+
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/config.toml
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.tmp
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
 *~
-.DS_Store
-
-# Streamlit secrets (MAI pushare questi!)
-.streamlit/secrets.toml
-secrets.toml
-
-# File temporanei
-tmp/
-temp/
-*.tmp
-*.temp
 
 # Uploads
 uploads/
-media/
-
-# File di configurazione personali
-config_local.py
-*.local.py
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
-
-# Distribuzione / build
-dist/
-build/
-*.egg-info/
-
-# File di sistema Windows
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# File di sistema Mac
-.DS_Store
-.AppleDouble
-.LSOverride
-Icon
-._*
-.Spotlight-V100
-.Trashes
-
-# Testing
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Docker
-.dockerignore
-Dockerfile
-docker-compose.yml
-
-# Backup automatici
-*.bak
-*.backup
+temp/
+*.tmp

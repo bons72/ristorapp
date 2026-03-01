@@ -1,4 +1,7 @@
-build-essential
-python3-dev
-libssl-dev
-libffi-dev
+streamlit
+pandas
+pillow
+qrcode[pil]
+streamlit-autorefresh
+requests
+python-dateutil

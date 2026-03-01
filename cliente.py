@@ -1,6 +1,6 @@
 """
 PALAZZO FIORINI - Menu Digitale per Clienti
-Versione 2.1 - Con gestione variazioni e miglioramenti UI
+Versione 2.2 - UI Pulita e Professionale
 """
 
 import streamlit as st
@@ -13,12 +13,17 @@ import traceback
 import json
 
 # ============================================================================
-# CONFIGURAZIONE DATABASE
+# CONFIGURAZIONE DATABASE - MODIFICATA PER STREAMLIT CLOUD
 # ============================================================================
 def get_db_path():
     """Restituisce il percorso del database"""
+    # Per Streamlit Cloud
     if os.environ.get('STREAMLIT_CLOUD'):
         return os.path.join(tempfile.gettempdir(), "ristorante.db")
+    # Per variabile d'ambiente impostata (da app.py)
+    elif os.environ.get('DB_PATH'):
+        return os.environ.get('DB_PATH')
+    # Per sviluppo locale
     else:
         return "ristorante.db"
 
@@ -42,10 +47,12 @@ def get_menu_completo():
                 c.id as cat_id,
                 c.nome as cat_nome,
                 c.icona as cat_icona,
+                c.attiva as cat_attiva,
                 p.id as piatto_id,
                 p.nome as piatto_nome,
                 p.descrizione_pubblica,
                 p.prezzo,
+                p.disponibile as piatto_disponibile,
                 p.foto_data
             FROM categorie c
             LEFT JOIN piatti p ON c.id = p.categoria_id AND p.disponibile = 1
@@ -53,11 +60,13 @@ def get_menu_completo():
             ORDER BY c.ordine, p.nome
         """)
         
+        results = cursor.fetchall()
+        
         menu = []
         current_cat = None
         current_cat_data = None
         
-        for row in cursor.fetchall():
+        for row in results:
             cat_id = row['cat_id']
             
             if current_cat != cat_id:
@@ -191,15 +200,10 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
     """Salva pre-ordine con verifica e restituisce l'ID"""
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH)  # USA DB_PATH
         cursor = conn.cursor()
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        
-        print("=" * 60)
-        print(f"📝 SALVATAGGIO PRE-ORDINE - Tavolo: {tavolo_id}")
-        print(f"   Piatti: {len(carrello)}")
-        print(f"   Note generali: {note}")
         
         # Inserisci preordine
         cursor.execute("""
@@ -208,10 +212,9 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
         """, (tavolo_id, note, timestamp))
         
         preordine_id = cursor.lastrowid
-        print(f"✅ Pre-ordine ID: {preordine_id}")
         
         # Inserisci dettagli
-        for idx, item in enumerate(carrello):
+        for item in carrello:
             # Prepara JSON per le variazioni
             variazioni_json = json.dumps(item.get('variazioni', []))
             
@@ -228,23 +231,8 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
                 variazioni_json,
                 item.get('note', '')
             ))
-            print(f"   {idx+1}. {item['qty']}x {item['nome']} @ €{item['prezzo']}")
-            if item.get('variazioni'):
-                for v in item['variazioni']:
-                    print(f"       ✦ {v['nome']} (+€{v['prezzo']})")
         
         conn.commit()
-        
-        # VERIFICA IMMEDIATA
-        cursor.execute("SELECT COUNT(*) FROM preordini WHERE id = ?", (preordine_id,))
-        if cursor.fetchone()[0] > 0:
-            print(f"✅ VERIFICA OK - Pre-ordine salvato")
-            cursor.execute("SELECT COUNT(*) FROM preordini_dettaglio WHERE preordine_id = ?", (preordine_id,))
-            print(f"✅ Dettagli salvati: {cursor.fetchone()[0]} piatti")
-        else:
-            print(f"❌ VERIFICA FALLITA - Pre-ordine NON trovato!")
-        
-        print("=" * 60)
         return preordine_id
         
     except Exception as e:
@@ -256,25 +244,6 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
     finally:
         if conn:
             conn.close()
-
-def debug_verifica_database():
-    """Verifica che tutte le tabelle necessarie esistano"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        tabelle_necessarie = ['preordini', 'preordini_dettaglio', 'tavoli', 'piatti', 'variazioni']
-        risultato = {}
-        
-        for tabella in tabelle_necessarie:
-            cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{tabella}'")
-            risultato[tabella] = cursor.fetchone() is not None
-        
-        conn.close()
-        return risultato
-    except Exception as e:
-        print(f"❌ Errore verifica database: {e}")
-        return {}
 
 # ============================================================================
 # PAGINA CLIENTE PRINCIPALE
@@ -302,24 +271,52 @@ def show_cliente_page():
         return
     
     # ========================================================================
-    # DEBUG INFO (visibile solo in sviluppo)
-    # ========================================================================
-    with st.sidebar.expander("🔧 DEBUG INFO", expanded=False):
-        st.write(f"📦 Database: {DB_PATH}")
-        tabelle = debug_verifica_database()
-        for tabella, esiste in tabelle.items():
-            if esiste:
-                st.success(f"✅ {tabella}")
-            else:
-                st.error(f"❌ {tabella}")
-    
-    # ========================================================================
-    # HEADER
+    # HEADER CON STILE PROFESSIONALE
     # ========================================================================
     st.markdown(f"""
-        <div style='text-align: center; padding: 0.8rem; background-color: #d35400; color: white; border-radius: 0 0 10px 10px; margin-bottom: 1rem;'>
-            <h1 style='margin:0; font-size:1.8rem;'>🍽️ PALAZZO FIORINI</h1>
-            <p style='margin:0; font-size:1.2rem;'>Tavolo {tavolo_id}</p>
+        <style>
+            .header {{
+                background: linear-gradient(135deg, #d35400 0%, #e67e22 100%);
+                padding: 1.5rem;
+                border-radius: 0 0 20px 20px;
+                margin-bottom: 2rem;
+                text-align: center;
+                color: white;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            }}
+            .header h1 {{
+                margin: 0;
+                font-size: 2.2rem;
+                font-weight: 600;
+                letter-spacing: 1px;
+            }}
+            .header p {{
+                margin: 0.5rem 0 0 0;
+                font-size: 1.2rem;
+                opacity: 0.9;
+            }}
+            .header .tavolo {{
+                background: rgba(255,255,255,0.2);
+                display: inline-block;
+                padding: 0.3rem 1.5rem;
+                border-radius: 50px;
+                margin-top: 0.8rem;
+                font-weight: 500;
+            }}
+            .card {{
+                border: 1px solid #e0e0e0;
+                border-radius: 10px;
+                padding: 1rem;
+                margin-bottom: 1rem;
+                background: white;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            }}
+        </style>
+        
+        <div class="header">
+            <h1>🍽️ PALAZZO FIORINI</h1>
+            <p>Benvenuti nel nostro ristorante</p>
+            <div class="tavolo">Tavolo {tavolo_id}</div>
         </div>
     """, unsafe_allow_html=True)
     
@@ -346,7 +343,6 @@ def show_cliente_page():
             
             if not menu:
                 st.warning("Menu non disponibile")
-                st.info("Verifica che il database sia stato inizializzato correttamente")
                 return
             
             # Tabs per categorie
@@ -357,11 +353,11 @@ def show_cliente_page():
             for idx, (tab, categoria) in enumerate(zip(tabs, menu)):
                 with tab:
                     if not categoria['piatti']:
-                        st.info("Nessun piatto disponibile")
+                        st.info("Nessun piatto disponibile in questa categoria")
                         continue
                     
                     for piatto in categoria['piatti']:
-                        with st.container(border=True):
+                        with st.container():
                             col_img, col_info, col_prezzo = st.columns([1, 3, 1])
                             
                             with col_img:
@@ -369,14 +365,14 @@ def show_cliente_page():
                                     try:
                                         st.image(piatto['foto'], width=60)
                                     except:
-                                        st.markdown("🍽️")
+                                        st.markdown(f"<h2>{categoria['icona']}</h2>", unsafe_allow_html=True)
                                 else:
-                                    st.markdown("🍽️")
+                                    st.markdown(f"<h2>{categoria['icona']}</h2>", unsafe_allow_html=True)
                             
                             with col_info:
                                 st.markdown(f"**{piatto['nome']}**")
                                 if piatto['descrizione']:
-                                    st.caption(piatto['descrizione'][:80])
+                                    st.caption(piatto['descrizione'][:80] + ("..." if len(piatto['descrizione']) > 80 else ""))
                             
                             with col_prezzo:
                                 st.markdown(f"**{format_currency(piatto['prezzo'])}**")
@@ -384,7 +380,7 @@ def show_cliente_page():
                             # Variazioni (se disponibili)
                             variazioni_selezionate = []
                             if piatto.get('variazioni') and len(piatto['variazioni']) > 0:
-                                with st.expander("✨ Aggiungi variazioni", expanded=False):
+                                with st.expander("✨ Personalizza", expanded=False):
                                     cols = st.columns(2)
                                     for i, var in enumerate(piatto['variazioni']):
                                         with cols[i % 2]:
@@ -427,12 +423,14 @@ def show_cliente_page():
                                         st.rerun()
                                     else:
                                         st.warning("Seleziona una quantità")
+                            
+                            st.markdown("---")
         
         with col_carrello:
             st.markdown("### 🛒 Il tuo ordine")
             
             if not st.session_state.cliente_carrello:
-                st.info("👆 Tocca ➕ sui piatti per iniziare")
+                st.info("👆 Seleziona i piatti per iniziare")
             else:
                 # Raggruppa piatti uguali (considerando anche variazioni)
                 riassunto = {}
@@ -507,13 +505,15 @@ def show_cliente_page():
                                 time.sleep(2)
                                 st.rerun()
                             else:
-                                st.error("❌ Errore nell'invio. Verifica il database e riprova.")
+                                st.error("❌ Errore nell'invio. Riprova o contatta il personale.")
+                    else:
+                        st.warning("Il carrello è vuoto")
     
     # ========================================================================
     # TAB 2: STORICO ORDINI
     # ========================================================================
     with tab_storico:
-        st.markdown("### 📜 I tuoi ordini precedenti")
+        st.markdown("### 📜 I tuoi ordini")
         
         ordini = get_storico_ordini(tavolo_id)
         
@@ -537,17 +537,17 @@ def show_cliente_page():
                     'ANNULLATO': '❌'
                 }.get(ordine['stato'], '📋')
                 
-                with st.expander(f"{stato_emoji} Ordine del {data_ora} - {ordine['stato']}"):
+                with st.expander(f"{stato_emoji} Ordine del {data_ora}"):
                     col1, col2 = st.columns(2)
                     
                     with col1:
                         st.write(f"**Stato:** {ordine['stato']}")
-                        st.write(f"**Piatti ordinati:** {ordine['numero_piatti']}")
+                        st.write(f"**Piatti:** {ordine['numero_piatti']}")
                     
                     with col2:
                         st.write(f"**Totale:** {format_currency(ordine['totale'])}")
                     
-                    st.markdown("##### Dettaglio piatti:")
+                    st.markdown("##### Dettaglio:")
                     for d in ordine['dettagli']:
                         prezzo_totale = d['qty'] * d['prezzo_unitario']
                         st.markdown(f"• {d['qty']}x **{d['piatto_nome']}** - {format_currency(prezzo_totale)}")
@@ -561,4 +561,4 @@ def show_cliente_page():
                             st.caption(f"  📝 {d['note']}")
                     
                     if ordine.get('note'):
-                        st.info(f"📝 Note ordine: {ordine['note']}")
+                        st.info(f"📝 Note: {ordine['note']}")

@@ -173,6 +173,27 @@ with st.sidebar.expander("🐛 DEBUG INFO", expanded=False):
         st.info("Nessun debug disponibile")
 
 # ============================================================================
+# INIZIALIZZAZIONE DATABASE PER STREAMLIT CLOUD (AGGIUNTA QUI)
+# ============================================================================
+import os
+import tempfile
+
+# In Streamlit Cloud, usa database temporaneo ma con inizializzazione
+if os.environ.get('STREAMLIT_CLOUD'):
+    cloud_db_path = os.path.join(tempfile.gettempdir(), "ristorante.db")
+    os.environ['DB_PATH'] = cloud_db_path
+    
+    # Inizializza se non esiste
+    if not os.path.exists(cloud_db_path):
+        try:
+            from init_cloud import init_cloud_database
+            init_cloud_database()
+            write_debug("✅ Database cloud inizializzato da app.py")
+        except Exception as e:
+            write_debug(f"❌ Errore inizializzazione cloud: {e}")
+            print(f"❌ Errore inizializzazione cloud: {e}")
+
+# ============================================================================
 # ROUTING PER PAGINA CLIENTE (funzione di supporto)
 # ============================================================================
 def check_cliente_mode():
@@ -185,16 +206,6 @@ def check_cliente_mode():
     if isinstance(mode, list):
         mode = mode[0] if mode else None
     return tavolo is not None and mode == 'cliente'
-
-# ============================================================================
-# CONFIGURAZIONE PAGINA (SOLO PER LO STAFF)
-# ============================================================================
-st.set_page_config(
-    page_title="PALAZZO FIORINI - Staff",
-    page_icon="🍽️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # Auto-refresh intelligente (ogni 3 secondi)
 count = st_autorefresh(interval=3000, key="autorefresh")
@@ -1914,6 +1925,15 @@ def show_gestione_categorie():
 # GESTIONE PIATTI CON IMMAGINI E RICETTE
 # ============================================================================
 def show_gestione_piatti():
+    """Gestione completa dei piatti con modifica ed eliminazione"""
+    
+    # ============================================================================
+    # GESTIONE MODIFICA PIATTO (se in modalità edit)
+    # ============================================================================
+    if st.session_state.get('edit_piatto_id'):
+        show_modifica_piatto()
+        return
+    
     st.markdown("### 🍽️ Gestione Piatti")
     
     # Filtri
@@ -1924,13 +1944,15 @@ def show_gestione_piatti():
         filtro_cat = st.selectbox(
             "Filtra categoria",
             options=list(cat_options.keys()),
-            format_func=lambda x: cat_options[x]
+            format_func=lambda x: cat_options[x],
+            key="filtro_cat_piatti"
         )
     
     with col_f2:
         filtro_disponibile = st.selectbox(
             "Disponibilità",
-            ["TUTTI", "Disponibili", "Non disponibili"]
+            ["TUTTI", "Disponibili", "Non disponibili"],
+            key="filtro_disp_piatti"
         )
     
     # Nuovo piatto
@@ -1993,7 +2015,8 @@ def show_gestione_piatti():
             foto_file = st.file_uploader(
                 "Carica immagine (JPG, PNG, max 5MB)",
                 type=['jpg', 'jpeg', 'png'],
-                help="Seleziona una foto dal tuo computer"
+                help="Seleziona una foto dal tuo computer",
+                key="nuovo_piatto_foto"
             )
             
             if foto_file:
@@ -2014,7 +2037,7 @@ def show_gestione_piatti():
                             'preparazione': preparazione,
                             'note_cucina': note_cucina,
                             'allergeni': allergeni
-                        })
+                        }, ensure_ascii=False)
                         
                         # Salva con o senza foto
                         if 'temp_foto' in st.session_state and st.session_state['temp_foto']:
@@ -2120,20 +2143,268 @@ def show_gestione_piatti():
                 with col3:
                     st.markdown("**Azioni**")
                     
+                    # Bottone MODIFICA
                     if st.button("✏️ Modifica", key=f"edit_{p['id']}", use_container_width=True):
                         st.session_state.edit_piatto_id = p['id']
                         st.rerun()
                     
+                    # Bottone ATTIVA/DISATTIVA
                     nuovo_stato = "❌ Disabilita" if p['disponibile'] else "✅ Abilita"
                     if st.button(nuovo_stato, key=f"toggle_{p['id']}", use_container_width=True):
                         esegui_query("UPDATE piatti SET disponibile = ? WHERE id = ?", 
                                     (0 if p['disponibile'] else 1, p['id']), commit=True)
+                        st.success(f"✅ Piatto {'disabilitato' if p['disponibile'] else 'abilitato'}!")
                         st.rerun()
                     
-                    if st.button("🗑️ Elimina", key=f"del_{p['id']}", use_container_width=True):
-                        if st.checkbox(f"Confermi?", key=f"conf_{p['id']}"):
-                            esegui_query("DELETE FROM piatti WHERE id = ?", (p['id'],), commit=True)
-                            st.rerun()
+                    # Bottone ELIMINA con conferma
+                    delete_key = f"del_{p['id']}"
+                    confirm_key = f"conf_del_{p['id']}"
+                    
+                    if st.button("🗑️ Elimina", key=delete_key, use_container_width=True):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
+                    
+                    if st.session_state.get(confirm_key, False):
+                        st.warning(f"Sei sicuro di voler eliminare '{p['nome']}'?")
+                        col_conf1, col_conf2 = st.columns(2)
+                        with col_conf1:
+                            if st.button("✅ Sì", key=f"yes_{p['id']}", use_container_width=True):
+                                try:
+                                    # Prima elimina eventuali riferimenti in comandine e preordini_dettaglio
+                                    esegui_query("DELETE FROM comandine WHERE piatto_id = ?", (p['id'],), commit=True)
+                                    esegui_query("DELETE FROM preordini_dettaglio WHERE piatto_id = ?", (p['id'],), commit=True)
+                                    # Poi elimina il piatto
+                                    esegui_query("DELETE FROM piatti WHERE id = ?", (p['id'],), commit=True)
+                                    st.success(f"✅ Piatto '{p['nome']}' eliminato!")
+                                    del st.session_state[confirm_key]
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Errore durante l'eliminazione: {e}")
+                        with col_conf2:
+                            if st.button("❌ No", key=f"no_{p['id']}", use_container_width=True):
+                                del st.session_state[confirm_key]
+                                st.rerun()
+
+
+def show_modifica_piatto():
+    """Form per modificare un piatto esistente"""
+    piatto_id = st.session_state.edit_piatto_id
+    
+    # Recupera i dati del piatto
+    piatto = esegui_query("SELECT * FROM piatti WHERE id = ?", (piatto_id,), fetchone=True)
+    
+    if not piatto:
+        st.error("Piatto non trovato")
+        del st.session_state.edit_piatto_id
+        st.rerun()
+        return
+    
+    st.markdown(f"### ✏️ Modifica Piatto: {piatto['nome']}")
+    
+    # Pulsante per tornare indietro
+    if st.button("⬅️ Torna alla lista", key="back_from_edit"):
+        del st.session_state.edit_piatto_id
+        if 'temp_foto_mod' in st.session_state:
+            del st.session_state['temp_foto_mod']
+        if 'rimuovi_foto' in st.session_state:
+            del st.session_state['rimuovi_foto']
+        st.rerun()
+    
+    st.divider()
+    
+    # Recupera categorie
+    categorie = esegui_query("SELECT * FROM categorie WHERE attiva = 1 ORDER BY nome", fetchall=True)
+    
+    # Decodifica ricetta se esiste
+    ricetta = {}
+    if piatto.get('descrizione_privata'):
+        try:
+            ricetta = json.loads(piatto['descrizione_privata'])
+        except:
+            ricetta = {}
+    
+    with st.form("modifica_piatto_form"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            nome = st.text_input("Nome piatto *", value=piatto['nome'])
+            
+            # Trova l'indice della categoria corrente
+            cat_index = 0
+            for i, c in enumerate(categorie):
+                if c['id'] == piatto['categoria_id']:
+                    cat_index = i
+                    break
+            
+            categoria_id = st.selectbox(
+                "Categoria *",
+                options=[c['id'] for c in categorie],
+                format_func=lambda x: next(f"{c['icona']} {c['nome']}" for c in categorie if c['id'] == x),
+                index=cat_index
+            )
+            prezzo = st.number_input("Prezzo (€) *", min_value=0.0, step=0.5, value=float(piatto['prezzo']))
+        
+        with col2:
+            tempo_prep = st.number_input("Tempo preparazione (min)", min_value=1, value=piatto['tempo_preparazione'] or 15)
+            disponibile = st.checkbox("Disponibile", value=bool(piatto['disponibile']))
+            ordinamento = st.number_input("Ordine", min_value=1, value=piatto['ordine'] or 10)
+        
+        st.divider()
+        st.markdown("##### 📖 Descrizione pubblica (visibile ai clienti)")
+        descrizione_pubblica = st.text_area(
+            "Descrizione per il menu",
+            value=piatto['descrizione_pubblica'] or "",
+            height=100
+        )
+        
+        st.divider()
+        st.markdown("##### 🔒 Ricetta segreta (visibile solo a staff)")
+        
+        col_ric1, col_ric2 = st.columns(2)
+        with col_ric1:
+            ingredienti = st.text_area(
+                "🥗 Ingredienti",
+                value=ricetta.get('ingredienti', ''),
+                height=150
+            )
+            preparazione = st.text_area(
+                "👨‍🍳 Preparazione",
+                value=ricetta.get('preparazione', ''),
+                height=150
+            )
+        
+        with col_ric2:
+            note_cucina = st.text_area(
+                "📝 Note per la cucina",
+                value=ricetta.get('note_cucina', ''),
+                height=150
+            )
+            allergeni = st.multiselect(
+                "⚠️ Allergeni",
+                ["Glutine", "Lattosio", "Uova", "Soia", "Frutta a guscio", "Crostacei", "Pesce", "Sedano"],
+                default=ricetta.get('allergeni', [])
+            )
+        
+        st.divider()
+        st.markdown("##### 📸 Foto del piatto")
+        
+        # Mostra foto attuale se presente
+        if piatto.get('foto_data'):
+            st.image(piatto['foto_data'], width=200, caption="Foto attuale")
+            rimuovi_foto = st.checkbox("🗑️ Rimuovi foto", key="rimuovi_foto_check")
+            if rimuovi_foto:
+                st.session_state['rimuovi_foto'] = True
+        else:
+            st.info("Nessuna foto attuale")
+        
+        foto_file = st.file_uploader(
+            "Carica nuova immagine (JPG, PNG, max 5MB)",
+            type=['jpg', 'jpeg', 'png'],
+            help="Seleziona una foto dal tuo computer (lascia vuoto per mantenere l'attuale)",
+            key="modifica_piatto_foto"
+        )
+        
+        if foto_file:
+            if foto_file.size > 5 * 1024 * 1024:
+                st.error("File troppo grande (max 5MB)")
+            else:
+                st.image(foto_file, width=200, caption="Nuova anteprima")
+                st.session_state['temp_foto_mod'] = foto_file.getvalue()
+        
+        st.divider()
+        
+        col_save, col_cancel = st.columns(2)
+        with col_save:
+            submitted = st.form_submit_button("💾 SALVA MODIFICHE", type="primary", use_container_width=True)
+        with col_cancel:
+            cancel = st.form_submit_button("❌ ANNULLA", use_container_width=True)
+        
+        if submitted:
+            if not nome or not categoria_id:
+                st.error("Nome e categoria sono obbligatori")
+            else:
+                try:
+                    # Crea JSON per la ricetta
+                    ricetta_json = json.dumps({
+                        'ingredienti': ingredienti,
+                        'preparazione': preparazione,
+                        'note_cucina': note_cucina,
+                        'allergeni': allergeni
+                    }, ensure_ascii=False)
+                    
+                    # Prepara i parametri per l'update
+                    if st.session_state.get('rimuovi_foto', False):
+                        # Rimuovi foto
+                        esegui_query("""
+                            UPDATE piatti 
+                            SET nome = ?, categoria_id = ?, prezzo = ?, descrizione_pubblica = ?,
+                                descrizione_privata = ?, tempo_preparazione = ?, foto_data = NULL,
+                                disponibile = ?, ordine = ?
+                            WHERE id = ?
+                        """, (
+                            nome, categoria_id, prezzo, descrizione_pubblica,
+                            ricetta_json, tempo_prep,
+                            1 if disponibile else 0, ordinamento,
+                            piatto_id
+                        ), commit=True)
+                        st.success("✅ Foto rimossa!")
+                    
+                    elif 'temp_foto_mod' in st.session_state and st.session_state['temp_foto_mod']:
+                        # Aggiorna con nuova foto
+                        esegui_query("""
+                            UPDATE piatti 
+                            SET nome = ?, categoria_id = ?, prezzo = ?, descrizione_pubblica = ?,
+                                descrizione_privata = ?, tempo_preparazione = ?, foto_data = ?,
+                                disponibile = ?, ordine = ?
+                            WHERE id = ?
+                        """, (
+                            nome, categoria_id, prezzo, descrizione_pubblica,
+                            ricetta_json, tempo_prep, st.session_state['temp_foto_mod'],
+                            1 if disponibile else 0, ordinamento,
+                            piatto_id
+                        ), commit=True)
+                        del st.session_state['temp_foto_mod']
+                        st.success("✅ Foto aggiornata!")
+                    
+                    else:
+                        # Mantieni foto attuale
+                        esegui_query("""
+                            UPDATE piatti 
+                            SET nome = ?, categoria_id = ?, prezzo = ?, descrizione_pubblica = ?,
+                                descrizione_privata = ?, tempo_preparazione = ?,
+                                disponibile = ?, ordine = ?
+                            WHERE id = ?
+                        """, (
+                            nome, categoria_id, prezzo, descrizione_pubblica,
+                            ricetta_json, tempo_prep,
+                            1 if disponibile else 0, ordinamento,
+                            piatto_id
+                        ), commit=True)
+                    
+                    st.success(f"✅ Piatto '{nome}' aggiornato!")
+                    st.balloons()
+                    
+                    # Pulisci le variabili di sessione
+                    del st.session_state.edit_piatto_id
+                    if 'rimuovi_foto' in st.session_state:
+                        del st.session_state['rimuovi_foto']
+                    if 'temp_foto_mod' in st.session_state:
+                        del st.session_state['temp_foto_mod']
+                    
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"Errore durante l'aggiornamento: {e}")
+        
+        if cancel:
+            # Pulisci le variabili di sessione
+            del st.session_state.edit_piatto_id
+            if 'temp_foto_mod' in st.session_state:
+                del st.session_state['temp_foto_mod']
+            if 'rimuovi_foto' in st.session_state:
+                del st.session_state['rimuovi_foto']
+            st.rerun()
+
 
 # ============================================================================
 # GESTIONE VARIAZIONI
@@ -2191,10 +2462,11 @@ def show_gestione_variazioni():
                     with cols[2]:
                         if st.button("✏️", key=f"edit_var_{v['id']}"):
                             st.session_state.edit_var_id = v['id']
+                            st.rerun()
                     with cols[3]:
                         if st.button("🗑️", key=f"del_var_{v['id']}"):
                             if st.checkbox(f"Confermi?", key=f"conf_var_{v['id']}"):
-                                esegui_query("DELETE FROM variazioni WHERE id = ?", (v['id'],), commit=True)
+                                esegui_query("DELETE FROM variazioni WHERE id = ?", (v['id']), commit=True)
                                 st.rerun()
 
 # ============================================================================

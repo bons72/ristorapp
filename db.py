@@ -1,6 +1,6 @@
 """
 DATABASE MANAGER PROFESSIONALE - PALAZZO FIORINI
-Versione 2.0 - Ottimizzato per performance e affidabilità
+Versione 2.1 - Corretto e Ottimizzato
 """
 
 import sqlite3
@@ -417,7 +417,18 @@ def create_tables(cursor):
         )
     """)
     
-    # 12. PRE-ORDINI CLIENTI
+    # 12. CONFIGURAZIONE APP
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS config (
+            chiave TEXT PRIMARY KEY,
+            valore TEXT,
+            tipo TEXT DEFAULT 'text',
+            descrizione TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # 13. PRE-ORDINI CLIENTI
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS preordini (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -441,14 +452,14 @@ def create_tables(cursor):
             piatto_nome TEXT NOT NULL,
             qty INTEGER DEFAULT 1,
             prezzo_unitario REAL NOT NULL,
-            variazioni TEXT,
+            variazioni TEXT DEFAULT '[]',
             note TEXT,
             FOREIGN KEY (preordine_id) REFERENCES preordini(id) ON DELETE CASCADE,
             FOREIGN KEY (piatto_id) REFERENCES piatti(id)
         )
     """)
     
-    # 13. CLIENTI
+    # 14. CLIENTI
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS clienti (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -483,6 +494,11 @@ def create_indexes(cursor):
         ("idx_pagamenti_data", "pagamenti(date(timestamp_pagamento))"),
         ("idx_notifiche_destinatario", "notifiche(destinatario_id, letto)"),
         ("idx_tavoli_sala_stato", "tavoli(sala_id, stato)"),
+        ("idx_preordini_tavolo", "preordini(tavolo_id, stato)"),
+        ("idx_preordini_data", "preordini(timestamp_creazione)"),
+        ("idx_preordini_dettaglio", "preordini_dettaglio(preordine_id)"),
+        ("idx_piatti_categoria", "piatti(categoria_id, disponibile)"),
+        ("idx_config_chiave", "config(chiave)"),
     ]
     
     for nome, definizione in indici:
@@ -589,17 +605,27 @@ def populate_initial_data(cursor):
     
     # Variazioni
     variazioni = [
-        (1, 'Glutine', 0.50, 1, 1),
-        (2, 'Lattosio', 0.50, 1, 2),
-        (3, 'Mozzarella extra', 1.50, 1, 3),
-        (4, 'Funghi', 1.00, 4, 4),
-        (5, 'Crostino', 0.30, 1, 5),
+        (1, 'Mozzarella extra', 1.50, 4, 1),
+        (2, 'Funghi', 1.00, 4, 2),
+        (3, 'Prosciutto', 2.00, 4, 3),
+        (4, 'Pomodoro extra', 0.50, 4, 4),
+        (5, 'Glutine', 0.00, 1, 5),
+        (6, 'Lattosio', 0.00, 1, 6),
     ]
     for id, nome, prezzo, reparto_id, ordine in variazioni:
         cursor.execute("""
             INSERT OR IGNORE INTO variazioni (id, nome, prezzo, reparto_id, ordine)
             VALUES (?, ?, ?, ?, ?)
         """, (id, nome, prezzo, reparto_id, ordine))
+    
+    # Configurazioni iniziali
+    cursor.execute("""
+        INSERT OR IGNORE INTO config (chiave, valore, tipo, descrizione)
+        VALUES 
+        ('public_url', 'http://localhost:8501', 'text', 'URL pubblico per QR code'),
+        ('ristorante_nome', 'PALAZZO FIORINI', 'text', 'Nome del ristorante'),
+        ('iva_percentuale', '10', 'number', 'Percentuale IVA')
+    """)
     
     logger.info("Dati iniziali caricati con successo")
 
@@ -978,73 +1004,73 @@ import threading
 import queue
 import time
 
+# Variabili globali per il thread di stampa
+_print_queue = queue.Queue()
+_print_thread = None
+_print_running = False
+
+def start_print_worker():
+    """Avvia il thread per la stampa asincrona"""
+    global _print_thread, _print_running
+    if _print_thread is None or not _print_thread.is_alive():
+        _print_running = True
+        _print_thread = threading.Thread(target=_print_worker, daemon=True)
+        _print_thread.start()
+        print("🖨️ Servizio stampanti avviato")
+
+def stop_print_worker():
+    """Ferma il thread di stampa"""
+    global _print_running
+    _print_running = False
+    if _print_thread:
+        _print_thread.join(timeout=2)
+
+def _print_worker():
+    """Worker per stampa asincrona"""
+    global _print_running
+    while _print_running:
+        try:
+            job = _print_queue.get(timeout=1)
+            _execute_print(job)
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"Errore nel worker stampa: {e}")
+
+def _execute_print(job):
+    """Esegue effettivamente la stampa"""
+    try:
+        printer_config = job['printer']
+        content = job['content']
+        tipo = job['tipo']
+        comanda_id = job.get('comanda_id')
+        reparto_id = job.get('reparto_id')
+        
+        # Stampa simulata
+        print(f"\n🖨️ SIMULAZIONE STAMPA - {tipo}")
+        print(content)
+        print("-" * 40)
+        
+        # Log successo
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO log_stampe (tipo, reparto_id, comanda_id, contenuto, esito)
+                VALUES (?, ?, ?, ?, ?)
+            """, (tipo, reparto_id, comanda_id, content[:100], 'SIMULATO'))
+            conn.commit()
+            conn.close()
+        except:
+            pass
+        
+        print(f"✅ Stampato {tipo} per comanda {comanda_id} (SIMULATO)")
+        
+    except Exception as e:
+        print(f"❌ Errore stampa: {e}")
+
 class StampanteService:
     """Gestione stampanti termiche per reparti"""
-    
-    _print_queue = queue.Queue()
-    _print_thread = None
-    _running = False
-    
-    @classmethod
-    def start_print_worker(cls):
-        """Avvia il thread per la stampa asincrona"""
-        if cls._print_thread is None or not cls._print_thread.is_alive():
-            cls._running = True
-            cls._print_thread = threading.Thread(target=cls._print_worker, daemon=True)
-            cls._print_thread.start()
-            print("🖨️ Servizio stampanti avviato")
-    
-    @classmethod
-    def stop_print_worker(cls):
-        """Ferma il thread di stampa"""
-        cls._running = False
-        if cls._print_thread:
-            cls._print_thread.join(timeout=2)
-    
-    @classmethod
-    def _print_worker(cls):
-        """Worker per stampa asincrona"""
-        while cls._running:
-            try:
-                job = cls._print_queue.get(timeout=1)
-                cls._execute_print(job)
-            except queue.Empty:
-                continue
-            except Exception as e:
-                print(f"Errore nel worker stampa: {e}")
-    
-    @classmethod
-    def _execute_print(cls, job):
-        """Esegue effettivamente la stampa"""
-        try:
-            printer_config = job['printer']
-            content = job['content']
-            tipo = job['tipo']
-            comanda_id = job.get('comanda_id')
-            reparto_id = job.get('reparto_id')
-            
-            # Stampa simulata
-            print(f"\n🖨️ SIMULAZIONE STAMPA - {tipo}")
-            print(content)
-            print("-" * 40)
-            
-            # Log successo
-            try:
-                conn = sqlite3.connect(DB_PATH)
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO log_stampe (tipo, reparto_id, comanda_id, contenuto, esito)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (tipo, reparto_id, comanda_id, content[:100], 'SIMULATO'))
-                conn.commit()
-                conn.close()
-            except:
-                pass
-            
-            print(f"✅ Stampato {tipo} per comanda {comanda_id} (SIMULATO)")
-            
-        except Exception as e:
-            print(f"❌ Errore stampa: {e}")
     
     @staticmethod
     def get_stampanti_per_reparto(reparto_id):
@@ -1067,6 +1093,7 @@ class StampanteService:
     @staticmethod
     def stampa_comanda(comanda_id, reparto_id, piatti):
         """Prepara e accoda la stampa di una comanda"""
+        global _print_queue
         try:
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = dict_factory
@@ -1112,7 +1139,7 @@ class StampanteService:
                 'comanda_id': comanda_id,
                 'reparto_id': reparto_id
             }
-            cls._print_queue.put(job)
+            _print_queue.put(job)
             
             return True
         except Exception as e:
@@ -1120,7 +1147,7 @@ class StampanteService:
             return False
 
 # Avvia il worker all'avvio
-StampanteService.start_print_worker()
+start_print_worker()
 
 # ============================================================================
 # BACKUP E MANUTENZIONE
@@ -1142,62 +1169,6 @@ def backup_automatico():
         return None
 
 # ============================================================================
-# INIZIALIZZAZIONE DATABASE
-# ============================================================================
-def init_db(force=False):
-    """Inizializza il database completo"""
-    
-    print("=" * 60)
-    print("🔄 INIZIALIZZAZIONE DATABASE")
-    print("=" * 60)
-    print(f"📦 Database path: {DB_PATH}")
-    
-    try:
-        # Assicurati che la directory esista
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-        
-        with get_db_connection(init_mode=True) as conn:
-            cursor = conn.cursor()
-            
-            if force:
-                cursor.execute("DROP TABLE IF EXISTS log_stampe")
-                cursor.execute("DROP TABLE IF EXISTS stampanti")
-                cursor.execute("DROP TABLE IF EXISTS notifiche")
-                cursor.execute("DROP TABLE IF EXISTS pagamenti")
-                cursor.execute("DROP TABLE IF EXISTS comandine")
-                cursor.execute("DROP TABLE IF EXISTS comande")
-                cursor.execute("DROP TABLE IF EXISTS variazioni")
-                cursor.execute("DROP TABLE IF EXISTS piatti")
-                cursor.execute("DROP TABLE IF EXISTS categorie")
-                cursor.execute("DROP TABLE IF EXISTS reparti")
-                cursor.execute("DROP TABLE IF EXISTS tavoli")
-                cursor.execute("DROP TABLE IF EXISTS sale")
-                cursor.execute("DROP TABLE IF EXISTS utenti")
-                cursor.execute("DROP TABLE IF EXISTS brand")
-                cursor.execute("DROP TABLE IF EXISTS giornale_cassa")
-                cursor.execute("DROP TABLE IF EXISTS preordini")
-                cursor.execute("DROP TABLE IF EXISTS preordini_dettaglio")
-                cursor.execute("DROP TABLE IF EXISTS clienti")
-            
-            create_tables(cursor)
-            create_indexes(cursor)
-            populate_initial_data(cursor)
-        
-        print("✅ Database inizializzato con successo!")
-        
-        # Backup automatico solo in locale
-        if not os.environ.get('STREAMLIT_CLOUD'):
-            backup_automatico()
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Errore inizializzazione: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-# ============================================================================
 # CONFIGURAZIONE APP - GESTIONE URL PUBBLICO
 # ============================================================================
 def salva_url_pubblico(url):
@@ -1207,19 +1178,21 @@ def salva_url_pubblico(url):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Crea tabella config se non esiste
+        # Crea tabella config se non esiste (già fatta, ma per sicurezza)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS config (
                 chiave TEXT PRIMARY KEY,
                 valore TEXT,
+                tipo TEXT DEFAULT 'text',
+                descrizione TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         
         # Inserisci o aggiorna l'URL
         cursor.execute("""
-            INSERT OR REPLACE INTO config (chiave, valore, updated_at)
-            VALUES ('public_url', ?, CURRENT_TIMESTAMP)
+            INSERT OR REPLACE INTO config (chiave, valore, tipo, updated_at)
+            VALUES ('public_url', ?, 'text', CURRENT_TIMESTAMP)
         """, (url,))
         
         conn.commit()
@@ -1243,6 +1216,8 @@ def carica_url_pubblico():
             CREATE TABLE IF NOT EXISTS config (
                 chiave TEXT PRIMARY KEY,
                 valore TEXT,
+                tipo TEXT DEFAULT 'text',
+                descrizione TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -1264,6 +1239,125 @@ def carica_url_pubblico():
             conn.close()
 
 # ============================================================================
+# FUNZIONE DI VERIFICA DATABASE
+# ============================================================================
+def verifica_database():
+    """Verifica che tutte le tabelle e i dati essenziali esistano"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Lista tabelle richieste
+        tabelle_richieste = [
+            'brand', 'utenti', 'sale', 'tavoli', 'reparti',
+            'categorie', 'piatti', 'variazioni', 'comande',
+            'comandine', 'pagamenti', 'notifiche', 'preordini',
+            'preordini_dettaglio', 'config'
+        ]
+        
+        mancanti = []
+        for tabella in tabelle_richieste:
+            cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{tabella}'")
+            if not cursor.fetchone():
+                mancanti.append(tabella)
+        
+        conn.close()
+        
+        if mancanti:
+            print(f"⚠️ Tabelle mancanti: {', '.join(mancanti)}")
+            return False
+        else:
+            print("✅ Database verificato: tutte le tabelle presenti")
+            return True
+    except Exception as e:
+        print(f"❌ Errore verifica database: {e}")
+        return False
+
+# ============================================================================
+# INIZIALIZZAZIONE DATABASE
+# ============================================================================
+def init_db(force=False):
+    """Inizializza il database completo"""
+    
+    print("=" * 60)
+    print("🔄 INIZIALIZZAZIONE DATABASE")
+    print("=" * 60)
+    print(f"📦 Database path: {DB_PATH}")
+    
+    try:
+        # Assicurati che la directory esista
+        os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)) if os.path.dirname(DB_PATH) else '.', exist_ok=True)
+        
+        with get_db_connection(init_mode=True) as conn:
+            cursor = conn.cursor()
+            
+            if force:
+                print("⚠️ Forzatura: eliminazione tabelle esistenti...")
+                
+                # Disabilita temporaneamente i foreign keys
+                cursor.execute("PRAGMA foreign_keys = OFF")
+                
+                # Lista tabelle in ordine inverso (prima quelle con dipendenze)
+                tabelle = [
+                    'log_stampe',
+                    'stampanti',
+                    'notifiche',
+                    'pagamenti',
+                    'comandine',
+                    'comande',
+                    'preordini_dettaglio',
+                    'preordini',
+                    'variazioni',
+                    'piatti',
+                    'categorie',
+                    'tavoli',
+                    'sale',
+                    'reparti',
+                    'utenti',
+                    'giornale_cassa',
+                    'clienti',
+                    'config',
+                    'brand'
+                ]
+                
+                for tabella in tabelle:
+                    try:
+                        cursor.execute(f"DROP TABLE IF EXISTS {tabella}")
+                        print(f"   ✅ Tabella {tabella} eliminata")
+                    except Exception as e:
+                        print(f"   ⚠️ Tabella {tabella} non eliminata: {e}")
+                
+                # Riabilita foreign keys
+                cursor.execute("PRAGMA foreign_keys = ON")
+                print("✅ Eliminazione tabelle completata")
+            
+            # Crea le tabelle
+            create_tables(cursor)
+            print("✅ Tabelle create")
+            
+            # Crea indici
+            create_indexes(cursor)
+            print("✅ Indici creati")
+            
+            # Popola dati iniziali
+            populate_initial_data(cursor)
+            print("✅ Dati iniziali caricati")
+        
+        print("✅ Database inizializzato con successo!")
+        
+        # Backup automatico solo in locale
+        if not os.environ.get('STREAMLIT_CLOUD'):
+            backup_automatico()
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Errore inizializzazione: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+# ============================================================================
 # MAIN
 # ============================================================================
 if __name__ == "__main__":
@@ -1274,12 +1368,15 @@ if __name__ == "__main__":
             init_db(force=True)
         elif sys.argv[1] == "--backup":
             backup_automatico()
+        elif sys.argv[1] == "--verify":
+            verifica_database()
         elif sys.argv[1] == "--help":
             print("""
 Utilizzo:
   python db.py              Inizializzazione normale
   python db.py --force      Re-inizializza tutto (perde dati)
   python db.py --backup     Crea backup
+  python db.py --verify     Verifica integrità database
   python db.py --help       Mostra questo help
             """)
         else:
