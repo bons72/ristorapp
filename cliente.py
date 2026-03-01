@@ -1,6 +1,6 @@
 """
 PALAZZO FIORINI - Menu Digitale per Clienti
-Versione 2.0 - Ottimizzata per massima velocità
+Versione 2.1 - Con gestione variazioni e miglioramenti UI
 """
 
 import streamlit as st
@@ -10,9 +10,10 @@ import tempfile
 from datetime import datetime
 import time
 import traceback
+import json
 
 # ============================================================================
-# CONFIGURAZIONE DATABASE (veloce)
+# CONFIGURAZIONE DATABASE
 # ============================================================================
 def get_db_path():
     """Restituisce il percorso del database"""
@@ -28,13 +29,14 @@ DB_PATH = get_db_path()
 # ============================================================================
 
 @st.cache_data(ttl=60)
-def get_menu_semplificato():
-    """Recupera il menu in formato semplice e veloce"""
+def get_menu_completo():
+    """Recupera il menu completo con piatti e relative variazioni"""
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
+        # Query principale per categorie e piatti
         cursor.execute("""
             SELECT 
                 c.id as cat_id,
@@ -70,12 +72,16 @@ def get_menu_semplificato():
                 }
             
             if row['piatto_id']:
+                # Recupera le variazioni per questo piatto
+                variazioni = get_variazioni_per_piatto(row['piatto_id'])
+                
                 current_cat_data['piatti'].append({
                     'id': row['piatto_id'],
                     'nome': row['piatto_nome'],
                     'descrizione': row['descrizione_pubblica'] or '',
                     'prezzo': row['prezzo'],
-                    'foto': bool(row['foto_data'])
+                    'foto': row['foto_data'],
+                    'variazioni': variazioni
                 })
         
         if current_cat_data:
@@ -84,13 +90,53 @@ def get_menu_semplificato():
         conn.close()
         return menu
     except Exception as e:
-        print(f"❌ Errore in get_menu_semplificato: {e}")
+        print(f"❌ Errore in get_menu_completo: {e}")
         traceback.print_exc()
+        return []
+
+def get_variazioni_per_piatto(piatto_id):
+    """Recupera le variazioni disponibili per un piatto"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Prima ottieni la categoria del piatto per determinare il reparto
+        cursor.execute("""
+            SELECT c.reparto_id 
+            FROM piatti p
+            JOIN categorie c ON p.categoria_id = c.id
+            WHERE p.id = ?
+        """, (piatto_id,))
+        
+        reparto = cursor.fetchone()
+        if not reparto:
+            return []
+        
+        # Poi ottieni le variazioni del reparto
+        cursor.execute("""
+            SELECT * FROM variazioni 
+            WHERE reparto_id = ? AND attivo = 1
+            ORDER BY ordine, nome
+        """, (reparto['reparto_id'],))
+        
+        variazioni = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return variazioni
+    except Exception as e:
+        print(f"❌ Errore in get_variazioni_per_piatto: {e}")
         return []
 
 def format_currency(amount):
     """Formatta importo in euro"""
     return f"€{amount:.2f}"
+
+def calcola_totale_con_variazioni(prezzo_base, qty, variazioni_selezionate):
+    """Calcola il totale includendo le variazioni"""
+    totale = prezzo_base * qty
+    for var in variazioni_selezionate:
+        totale += var['prezzo'] * qty
+    return totale
 
 def get_storico_ordini(tavolo_id):
     """Recupera lo storico degli ordini per un tavolo"""
@@ -120,6 +166,17 @@ def get_storico_ordini(tavolo_id):
                 WHERE preordine_id = ?
             """, (row['id'],))
             dettagli = [dict(d) for d in cursor.fetchall()]
+            
+            # Parsing delle variazioni (che sono salvate come JSON)
+            for d in dettagli:
+                if d.get('variazioni') and d['variazioni'] != '[]':
+                    try:
+                        d['variazioni_parsed'] = json.loads(d['variazioni'])
+                    except:
+                        d['variazioni_parsed'] = []
+                else:
+                    d['variazioni_parsed'] = []
+            
             ordine['dettagli'] = dettagli
             ordini.append(ordine)
         
@@ -127,6 +184,7 @@ def get_storico_ordini(tavolo_id):
         return ordini
     except Exception as e:
         print(f"❌ Errore in get_storico_ordini: {e}")
+        traceback.print_exc()
         return []
 
 def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
@@ -141,6 +199,7 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
         print("=" * 60)
         print(f"📝 SALVATAGGIO PRE-ORDINE - Tavolo: {tavolo_id}")
         print(f"   Piatti: {len(carrello)}")
+        print(f"   Note generali: {note}")
         
         # Inserisci preordine
         cursor.execute("""
@@ -152,20 +211,27 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
         print(f"✅ Pre-ordine ID: {preordine_id}")
         
         # Inserisci dettagli
-        for item in carrello:
+        for idx, item in enumerate(carrello):
+            # Prepara JSON per le variazioni
+            variazioni_json = json.dumps(item.get('variazioni', []))
+            
             cursor.execute("""
                 INSERT INTO preordini_dettaglio 
-                (preordine_id, piatto_id, piatto_nome, qty, prezzo_unitario, note)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (preordine_id, piatto_id, piatto_nome, qty, prezzo_unitario, variazioni, note)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 preordine_id,
                 item['id'],
                 item['nome'],
                 item['qty'],
                 item['prezzo'],
+                variazioni_json,
                 item.get('note', '')
             ))
-            print(f"   - {item['qty']}x {item['nome']} @ €{item['prezzo']}")
+            print(f"   {idx+1}. {item['qty']}x {item['nome']} @ €{item['prezzo']}")
+            if item.get('variazioni'):
+                for v in item['variazioni']:
+                    print(f"       ✦ {v['nome']} (+€{v['prezzo']})")
         
         conn.commit()
         
@@ -197,7 +263,7 @@ def debug_verifica_database():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        tabelle_necessarie = ['preordini', 'preordini_dettaglio', 'tavoli', 'piatti']
+        tabelle_necessarie = ['preordini', 'preordini_dettaglio', 'tavoli', 'piatti', 'variazioni']
         risultato = {}
         
         for tabella in tabelle_necessarie:
@@ -215,7 +281,7 @@ def debug_verifica_database():
 # ============================================================================
 
 def show_cliente_page():
-    """Pagina cliente con menu e storico"""
+    """Pagina cliente con menu, variazioni e storico"""
     
     # ========================================================================
     # OTTIENI TAVOLO
@@ -276,7 +342,7 @@ def show_cliente_page():
         col_menu, col_carrello = st.columns([2, 1])
         
         with col_menu:
-            menu = get_menu_semplificato()
+            menu = get_menu_completo()
             
             if not menu:
                 st.warning("Menu non disponibile")
@@ -296,24 +362,71 @@ def show_cliente_page():
                     
                     for piatto in categoria['piatti']:
                         with st.container(border=True):
-                            col1, col2 = st.columns([3, 1])
+                            col_img, col_info, col_prezzo = st.columns([1, 3, 1])
                             
-                            with col1:
+                            with col_img:
+                                if piatto.get('foto'):
+                                    try:
+                                        st.image(piatto['foto'], width=60)
+                                    except:
+                                        st.markdown("🍽️")
+                                else:
+                                    st.markdown("🍽️")
+                            
+                            with col_info:
                                 st.markdown(f"**{piatto['nome']}**")
                                 if piatto['descrizione']:
-                                    st.caption(piatto['descrizione'][:60])
+                                    st.caption(piatto['descrizione'][:80])
                             
-                            with col2:
+                            with col_prezzo:
                                 st.markdown(f"**{format_currency(piatto['prezzo'])}**")
-                                if st.button("➕", key=f"add_{piatto['id']}_{idx}"):
-                                    st.session_state.cliente_carrello.append({
-                                        'id': piatto['id'],
-                                        'nome': piatto['nome'],
-                                        'prezzo': piatto['prezzo'],
-                                        'qty': 1,
-                                        'note': ''
-                                    })
-                                    st.rerun()
+                            
+                            # Variazioni (se disponibili)
+                            variazioni_selezionate = []
+                            if piatto.get('variazioni') and len(piatto['variazioni']) > 0:
+                                with st.expander("✨ Aggiungi variazioni", expanded=False):
+                                    cols = st.columns(2)
+                                    for i, var in enumerate(piatto['variazioni']):
+                                        with cols[i % 2]:
+                                            if st.checkbox(
+                                                f"{var['nome']} (+{format_currency(var['prezzo'])})",
+                                                key=f"var_{piatto['id']}_{var['id']}_{idx}"
+                                            ):
+                                                variazioni_selezionate.append(var)
+                            
+                            # Quantità e bottone aggiungi
+                            col_qty, col_btn = st.columns([1, 2])
+                            with col_qty:
+                                qty = st.number_input(
+                                    "Qtà",
+                                    min_value=0,
+                                    max_value=10,
+                                    value=0,
+                                    key=f"qty_{piatto['id']}_{idx}",
+                                    label_visibility="collapsed"
+                                )
+                            
+                            with col_btn:
+                                if st.button("➕ Aggiungi", key=f"add_{piatto['id']}_{idx}", use_container_width=True):
+                                    if qty > 0:
+                                        # Calcola prezzo con variazioni
+                                        prezzo_totale = piatto['prezzo']
+                                        for v in variazioni_selezionate:
+                                            prezzo_totale += v['prezzo']
+                                        
+                                        st.session_state.cliente_carrello.append({
+                                            'id': piatto['id'],
+                                            'nome': piatto['nome'],
+                                            'prezzo_base': piatto['prezzo'],
+                                            'prezzo': prezzo_totale,
+                                            'qty': qty,
+                                            'variazioni': variazioni_selezionate,
+                                            'note': ''
+                                        })
+                                        st.success(f"✅ {qty}x {piatto['nome']} aggiunto!")
+                                        st.rerun()
+                                    else:
+                                        st.warning("Seleziona una quantità")
         
         with col_carrello:
             st.markdown("### 🛒 Il tuo ordine")
@@ -321,10 +434,13 @@ def show_cliente_page():
             if not st.session_state.cliente_carrello:
                 st.info("👆 Tocca ➕ sui piatti per iniziare")
             else:
-                # Raggruppa piatti uguali
+                # Raggruppa piatti uguali (considerando anche variazioni)
                 riassunto = {}
                 for item in st.session_state.cliente_carrello:
-                    key = f"{item['id']}"
+                    # Crea una chiave unica che includa ID e variazioni
+                    var_key = "_".join([str(v['id']) for v in item.get('variazioni', [])]) or "base"
+                    key = f"{item['id']}_{var_key}"
+                    
                     if key not in riassunto:
                         riassunto[key] = item.copy()
                     else:
@@ -338,24 +454,34 @@ def show_cliente_page():
                         with col1:
                             st.markdown(f"**{item['nome']}**")
                             st.caption(f"x{item['qty']}")
+                            if item.get('variazioni'):
+                                for v in item['variazioni']:
+                                    st.caption(f"  ✦ {v['nome']} (+{format_currency(v['prezzo'])})")
                         
                         with col2:
-                            importo = item['prezzo'] * item['qty']
+                            importo = calcola_totale_con_variazioni(
+                                item['prezzo_base'], 
+                                item['qty'], 
+                                item.get('variazioni', [])
+                            )
                             st.markdown(f"**{format_currency(importo)}**")
                             totale += importo
                         
                         with col3:
                             if st.button("🗑️", key=f"del_{key}"):
+                                # Rimuove tutti gli item con quella chiave
                                 nuovi = []
                                 for i in st.session_state.cliente_carrello:
-                                    if str(i['id']) != key:
+                                    var_key_i = "_".join([str(v['id']) for v in i.get('variazioni', [])]) or "base"
+                                    key_i = f"{i['id']}_{var_key_i}"
+                                    if key_i != key:
                                         nuovi.append(i)
                                 st.session_state.cliente_carrello = nuovi
                                 st.rerun()
                 
                 st.markdown(f"### Totale: {format_currency(totale)}")
                 
-                with st.expander("📝 Note", expanded=False):
+                with st.expander("📝 Note aggiuntive", expanded=False):
                     note = st.text_area(
                         "Allergie, preferenze...",
                         value=st.session_state.cliente_nota,
@@ -381,7 +507,7 @@ def show_cliente_page():
                                 time.sleep(2)
                                 st.rerun()
                             else:
-                                st.error("❌ Errore nell'invio. Verifica il database.")
+                                st.error("❌ Errore nell'invio. Verifica il database e riprova.")
     
     # ========================================================================
     # TAB 2: STORICO ORDINI
@@ -423,7 +549,14 @@ def show_cliente_page():
                     
                     st.markdown("##### Dettaglio piatti:")
                     for d in ordine['dettagli']:
-                        st.markdown(f"• {d['qty']}x {d['piatto_nome']} - {format_currency(d['prezzo_unitario'] * d['qty'])}")
+                        prezzo_totale = d['qty'] * d['prezzo_unitario']
+                        st.markdown(f"• {d['qty']}x **{d['piatto_nome']}** - {format_currency(prezzo_totale)}")
+                        
+                        # Mostra variazioni se presenti
+                        if d.get('variazioni_parsed'):
+                            for v in d['variazioni_parsed']:
+                                st.caption(f"  ✦ {v.get('nome', '')} (+{format_currency(v.get('prezzo', 0))})")
+                        
                         if d.get('note'):
                             st.caption(f"  📝 {d['note']}")
                     

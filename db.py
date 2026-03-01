@@ -253,6 +253,7 @@ def create_tables(cursor):
             tempo_preparazione INTEGER DEFAULT 10,
             foto_path TEXT DEFAULT NULL,
             foto_data BLOB DEFAULT NULL,
+            ordine INTEGER DEFAULT 10,       
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (categoria_id) REFERENCES categorie(id) ON DELETE CASCADE
         )
