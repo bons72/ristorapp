@@ -1,8 +1,9 @@
-# PALAZZO FIORINI - Python dependencies
-streamlit
-pandas
-pillow
-qrcode[pil]
-streamlit-autorefresh
-requests
-python-dateutil
+# Python dependencies for PALAZZO FIORINI
+# These are installed via pip, not apt-get
+streamlit>=1.28.0
+pandas>=2.0.0
+pillow>=10.0.0
+qrcode[pil]>=7.0.0
+streamlit-autorefresh>=1.0.0
+requests>=2.31.0
+python-dateutil>=2.8.0
