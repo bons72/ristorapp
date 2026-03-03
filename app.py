@@ -3049,4 +3049,36 @@ def main():
         write_debug(f"Errore verifica database: {e}", e)
     
     # Routing pagine
+    # Routing pagine
     pagina = st.session_state.get('pagina_corrente', 'dashboard')
+    
+    if pagina == 'dashboard':
+        show_dashboard()
+    elif pagina == 'sala':
+        show_sala()
+    elif pagina == 'cucina':
+        show_reparto("👨‍🍳 CUCINA", 1, mostra_tutti=True)
+    elif pagina == 'pasticceria':
+        show_reparto("🍰 PASTICCERIA", 3, mostra_tutti=False)
+    elif pagina == 'bar':
+        show_reparto("🍸 BAR", 2, mostra_tutti=False)
+    elif pagina == 'pizzeria':
+        show_reparto("🍕 PIZZERIA", 4, mostra_tutti=False)
+    elif pagina == 'cassa':
+        show_cassa()
+    elif pagina == 'stats':
+        show_stats_cassa()
+    elif pagina == 'preordini':
+        if 'preordine_in_revisione' in st.session_state:
+            show_revisione_preordine()
+        else:
+            show_preordini()
+    elif pagina == 'notifiche':
+        show_notifiche()
+    elif pagina == 'admin':
+        show_amministrazione()
+    else:
+        show_dashboard()
+
+if __name__ == "__main__":
+    main()
