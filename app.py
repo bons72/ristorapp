@@ -121,10 +121,33 @@ def init_database():
                 cursor = conn.cursor()
                 create_tables(cursor)
                 create_indexes(cursor)
-                populate_initial_data(cursor)
+                
+                # Popola i dati iniziali con gestione errori
+                try:
+                    write_debug("🔄 Popolamento dati iniziali...")
+                    populate_initial_data(cursor, conn)  # <-- AGGIUNTO conn!
+                    write_debug("✅ Dati iniziali popolati con successo")
+                except Exception as e:
+                    write_debug(f"❌ ERRORE nel popolamento dati iniziali: {e}", e)
+                    # Non blocchiamo l'avvio dell'app, ma logghiamo l'errore
+                    st.error(f"⚠️ Errore nel popolamento dati iniziali: {e}")
+            
             write_debug("✅ Database inizializzato con successo!")
         else:
             write_debug("✅ Database già esistente e funzionante")
+            
+            # Verifica rapida che i reparti esistano (log only)
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM reparti")
+                reparti_count = cursor.fetchone()[0]
+                conn.close()
+                write_debug(f"📊 Reparti presenti: {reparti_count}")
+                if reparti_count == 0:
+                    write_debug("⚠️ Nessun reparto trovato nel database esistente!")
+            except Exception as e:
+                write_debug(f"⚠️ Errore verifica reparti: {e}")
         
         return db_path
     except Exception as e:
@@ -138,6 +161,8 @@ if db_path:
     write_debug(f"✅ DB_PATH impostato a: {db_path}")
 else:
     write_debug("❌ Inizializzazione database fallita")
+    st.error("❌ Errore critico: impossibile inizializzare il database")
+    st.stop()
 
 # ============================================================================
 # IMPORT DAL DB.PY CON GESTIONE ERRORI
