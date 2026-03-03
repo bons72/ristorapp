@@ -398,6 +398,10 @@ def get_variazioni_per_piatto(piatto_id):
 def show_login():
     """Schermata di login - Crea il primo account se non esistono utenti"""
     
+    # === IMPORT DELLE FUNZIONI NECESSARIE ===
+    from db import esegui_query, verify_password, hash_password
+    # ========================================
+    
     # Verifica se esistono utenti nel database
     try:
         # Prova a contare gli utenti
