@@ -1615,7 +1615,259 @@ def avvia_scheduler_backup():
     # Avvia thread
     thread = threading.Thread(target=backup_worker, daemon=True)
     thread.start()
+    
+    # 🔥 NUOVO: Avvia anche il programma di pulizia avanzata
+    programma_pulizia_backup()
+    
     return thread
+
+
+# ============================================================================
+# PASSO 7C - PULIZIA AUTOMATICA BACKUP AVANZATA
+# ============================================================================
+def pulizia_backup_automatica_avanzata(mantenere=10, giorni_vecchi=30, comprimi=True):
+    """
+    Pulizia avanzata dei backup:
+    - Mantiene solo gli ultimi N backup
+    - Elimina backup più vecchi di X giorni
+    - Opzionalmente comprime i backup vecchi ma da mantenere
+    """
+    try:
+        backup_dir = "backup"
+        if not os.path.exists(backup_dir):
+            return 0, 0, 0
+        
+        backup_files = glob.glob(os.path.join(backup_dir, "ristorante_backup_*.db"))
+        backup_files += glob.glob(os.path.join(backup_dir, "ristorante_backup_*.db.gz"))
+        
+        if not backup_files:
+            return 0, 0, 0
+        
+        # Estrai info dai file
+        backups = []
+        for file in backup_files:
+            filename = os.path.basename(file)
+            match = re.search(r'backup_(\d{8}_\d{6})', filename)
+            if match:
+                timestamp_str = match.group(1)
+                try:
+                    timestamp = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+                    is_compressed = filename.endswith('.gz')
+                    backups.append({
+                        'path': file,
+                        'filename': filename,
+                        'timestamp': timestamp,
+                        'size': os.path.getsize(file),
+                        'compressed': is_compressed,
+                        'giorni': (datetime.now() - timestamp).days
+                    })
+                except:
+                    pass
+        
+        # Ordina per data (più recenti prima)
+        backups.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        eliminati = 0
+        compressi = 0
+        risparmiati = 0
+        
+        # 1. Mantieni solo gli ultimi N backup
+        if len(backups) > mantenere:
+            for vecchio in backups[mantenere:]:
+                try:
+                    # Se è vecchio e non compresso, prima comprimi se richiesto
+                    if comprimi and not vecchio['compressed'] and vecchio['giorni'] > 7:
+                        if comprimi_backup(vecchio['path']):
+                            compressi += 1
+                            risparmiati += vecchio['size'] - os.path.getsize(vecchio['path'] + '.gz')
+                            continue  # Non eliminare, è stato compresso
+                    
+                    # Altrimenti elimina
+                    os.remove(vecchio['path'])
+                    eliminati += 1
+                    logger.info(f"🗑️ Backup eliminato: {vecchio['filename']}")
+                except Exception as e:
+                    logger.error(f"Errore eliminazione {vecchio['filename']}: {e}")
+        
+        # 2. Elimina backup più vecchi di giorni_vecchi (se non già coperti)
+        soglia = datetime.now() - timedelta(days=giorni_vecchi)
+        for backup in backups[:mantenere]:  # Solo tra quelli mantenuti
+            if backup['timestamp'] < soglia:
+                try:
+                    os.remove(backup['path'])
+                    eliminati += 1
+                    logger.info(f"🗑️ Backup vecchio eliminato: {backup['filename']} ({backup['giorni']} giorni)")
+                except Exception as e:
+                    logger.error(f"Errore eliminazione {backup['filename']}: {e}")
+        
+        return eliminati, compressi, risparmiati
+        
+    except Exception as e:
+        logger.error(f"Errore pulizia backup avanzata: {e}")
+        return 0, 0, 0
+
+
+def comprimi_backup(file_path):
+    """Comprime un file di backup in .gz"""
+    try:
+        import gzip
+        
+        output_path = file_path + '.gz'
+        
+        # Se già esiste compresso, salta
+        if os.path.exists(output_path):
+            return False
+        
+        # Comprimi
+        with open(file_path, 'rb') as f_in:
+            with gzip.open(output_path, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        
+        # Verifica che il file compresso sia più piccolo
+        original_size = os.path.getsize(file_path)
+        compressed_size = os.path.getsize(output_path)
+        
+        if compressed_size < original_size * 0.8:  # Risparmio almeno 20%
+            # Elimina originale
+            os.remove(file_path)
+            logger.info(f"📦 Backup compresso: {os.path.basename(file_path)} -> {compressed_size/1024:.1f} KB (risparmio {((original_size-compressed_size)/original_size*100):.1f}%)")
+            return True
+        else:
+            # Se non conviene, elimina il compresso
+            os.remove(output_path)
+            return False
+            
+    except Exception as e:
+        logger.error(f"Errore compressione {file_path}: {e}")
+        return False
+
+
+def programma_pulizia_backup():
+    """Avvia schedulazione pulizia backup (da chiamare all'avvio)"""
+    import threading
+    import time
+    
+    def worker_pulizia():
+        while True:
+            try:
+                config = carica_config_pulizia()
+                
+                # Esegui pulizia una volta al giorno (controlla ogni ora)
+                if datetime.now().hour == 3:  # Alle 3 di notte
+                    logger.info("🔄 Avvio pulizia backup automatica...")
+                    
+                    eliminati, compressi, risparmiati = pulizia_backup_automatica_avanzata(
+                        mantenere=config.get('max_backups', 10),
+                        giorni_vecchi=30,
+                        comprimi=True
+                    )
+                    
+                    if eliminati > 0 or compressi > 0:
+                        logger.info(f"✅ Pulizia completata: {eliminati} eliminati, {compressi} compressi, {risparmiati/1024:.1f} KB risparmiati")
+                    
+                    # Aspetta 24 ore prima di ricontrollare
+                    time.sleep(24 * 3600)
+                else:
+                    # Controlla ogni ora
+                    time.sleep(3600)
+                    
+            except Exception as e:
+                logger.error(f"Errore nel worker pulizia: {e}")
+                time.sleep(3600)
+    
+    # Avvia thread
+    thread = threading.Thread(target=worker_pulizia, daemon=True)
+    thread.start()
+    logger.info("⏰ Programma pulizia backup avviato (esecuzione alle 3:00)")
+    return thread
+
+
+def configura_pulizia_backup(mantenere=10, giorni_vecchi=30, auto_compress=True):
+    """Configura i parametri di pulizia automatica"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Assicurati che la tabella config esista
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS config (
+                chiave TEXT PRIMARY KEY,
+                valore TEXT,
+                tipo TEXT DEFAULT 'text',
+                descrizione TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Salva impostazioni
+        configurazioni = [
+            ('backup_mantieni', str(mantenere), 'number', 'Numero di backup da mantenere'),
+            ('backup_giorni_vecchi', str(giorni_vecchi), 'number', 'Giorni dopo cui eliminare backup'),
+            ('backup_auto_compress', str(auto_compress), 'boolean', 'Comprimi automaticamente backup vecchi')
+        ]
+        
+        for chiave, valore, tipo, descrizione in configurazioni:
+            cursor.execute("""
+                INSERT OR REPLACE INTO config (chiave, valore, tipo, descrizione)
+                VALUES (?, ?, ?, ?)
+            """, (chiave, valore, tipo, descrizione))
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"✅ Configurazione pulizia backup salvata: mantieni={mantenere}, giorni={giorni_vecchi}, compress={auto_compress}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Errore configurazione pulizia backup: {e}")
+        return False
+
+
+def carica_config_pulizia():
+    """Carica la configurazione di pulizia backup"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        config = {
+            'mantenere': 10,
+            'giorni_vecchi': 30,
+            'auto_compress': True
+        }
+        
+        cursor.execute("SELECT chiave, valore FROM config WHERE chiave IN ('backup_mantieni', 'backup_giorni_vecchi', 'backup_auto_compress')")
+        for chiave, valore in cursor.fetchall():
+            if chiave == 'backup_mantieni':
+                config['mantenere'] = int(valore)
+            elif chiave == 'backup_giorni_vecchi':
+                config['giorni_vecchi'] = int(valore)
+            elif chiave == 'backup_auto_compress':
+                config['auto_compress'] = valore.lower() == 'true'
+        
+        conn.close()
+        return config
+        
+    except Exception as e:
+        logger.error(f"Errore caricamento config pulizia: {e}")
+        return {'mantenere': 10, 'giorni_vecchi': 30, 'auto_compress': True}
+
+
+def esegui_pulizia_manuale(mantenere=None, giorni_vecchi=None, comprimi=None):
+    """Esegue pulizia manuale dei backup"""
+    config = carica_config_pulizia()
+    
+    eliminati, compressi, risparmiati = pulizia_backup_automatica_avanzata(
+        mantenere=mantenere if mantenere is not None else config['mantenere'],
+        giorni_vecchi=giorni_vecchi if giorni_vecchi is not None else config['giorni_vecchi'],
+        comprimi=comprimi if comprimi is not None else config['auto_compress']
+    )
+    
+    return {
+        'eliminati': eliminati,
+        'compressi': compressi,
+        'risparmiati_kb': risparmiati / 1024,
+        'messaggio': f"Pulizia completata: {eliminati} backup eliminati, {compressi} backup compressi, {risparmiati/1024:.1f} KB risparmiati"
+    }
 
 # ============================================================================
 # CONFIGURAZIONE APP - GESTIONE URL PUBBLICO
