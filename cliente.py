@@ -51,18 +51,18 @@ def get_brand_info():
             )
         """)
         
-        # Inserisci record default se non esiste
-        cursor.execute("INSERT OR IGNORE INTO brand (id, nome) VALUES (1, 'PALAZZO FIORINI')")
+        # Inserisci record default se non esiste (ORA CON RISTORAPP)
+        cursor.execute("INSERT OR IGNORE INTO brand (id, nome) VALUES (1, 'RISTORAPP')")
         conn.commit()
         
         cursor.execute("SELECT * FROM brand WHERE id = 1")
         brand = cursor.fetchone()
         conn.close()
         
-        return dict(brand) if brand else {'nome': 'PALAZZO FIORINI', 'logo_data': None}
+        return dict(brand) if brand else {'nome': 'RISTORAPP', 'logo_data': None}
     except Exception as e:
         print(f"Errore get_brand_info: {e}")
-        return {'nome': 'PALAZZO FIORINI', 'logo_data': None}
+        return {'nome': 'RISTORAPP', 'logo_data': None}
 
 # ============================================================================
 # FUNZIONI PER IL MENU E ORDINI
@@ -296,7 +296,7 @@ def show_cliente_page():
     # RECUPERA INFO BRAND
     # ========================================================================
     brand = get_brand_info()
-    ristorante_nome = brand.get('nome', 'PALAZZO FIORINI')
+    ristorante_nome = brand.get('nome', 'RISTORAPP')
     logo_data = brand.get('logo_data')
     
     # ========================================================================
@@ -340,7 +340,7 @@ def show_cliente_page():
             }
             
             /* Categorie - Più grandi */
-            .category-tab {
+            .stTabs [data-baseweb="tab"] {
                 font-size: 1.2rem !important;
                 font-weight: 600 !important;
                 padding: 0.8rem !important;
@@ -421,7 +421,6 @@ def show_cliente_page():
     
     if logo_data:
         import base64
-        from io import BytesIO
         encoded = base64.b64encode(logo_data).decode()
         header_html += f'<img src="data:image/png;base64,{encoded}" alt="Logo">'
     

@@ -21,7 +21,7 @@ import json
 # CONFIGURAZIONE PAGINA (DEVE ESSERE LA PRIMA CHIAMATA STREAMLIT!)
 # ============================================================================
 st.set_page_config(
-    page_title="PALAZZO FIORINI - Staff",
+    page_title="RISTORAPP - Staff",
     page_icon="🍽️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -237,6 +237,7 @@ def init_session_state():
         'username': None,
         'user_role': None,
         'pagina_corrente': None,
+        'brand_name': 'RISTORAPP',  # <-- MODIFICATO da PALAZZO FIORINI a RISTORAPP
         
         # Sala
         'tavolo_attivo': None,
@@ -277,6 +278,40 @@ def init_session_state():
             st.session_state[key] = value
 
 init_session_state()
+
+
+# ============================================================================
+# FUNZIONE PER OTTENERE IL NOME DEL BRAND
+# ============================================================================
+@st.cache_data(ttl=60)
+def get_brand_name():
+    """Restituisce il nome del ristorante dal database"""
+    try:
+        brand = esegui_query("SELECT nome FROM brand WHERE id = 1", fetchone=True)
+        if brand and brand.get('nome'):
+            # Aggiorna anche la sessione
+            st.session_state.brand_name = brand['nome']
+            return brand['nome']
+        else:
+            return st.session_state.brand_name
+    except Exception as e:
+        write_debug(f"Errore get_brand_name: {e}")
+        return st.session_state.brand_name
+
+
+# ============================================================================
+# CARICA IL BRAND ALL'AVVIO
+# ============================================================================
+# Prova a caricare il brand dal database
+try:
+    brand = esegui_query("SELECT nome FROM brand WHERE id = 1", fetchone=True)
+    if brand and brand.get('nome'):
+        st.session_state.brand_name = brand['nome']
+        write_debug(f"✅ Brand caricato: {brand['nome']}")
+except Exception as e:
+    write_debug(f"⚠️ Brand non caricato: {e}")
+    # Usa il default già impostato
+    pass
 
 # ============================================================================
 # FUNZIONI DI UTILITY
@@ -459,7 +494,7 @@ def show_sidebar():
     with st.sidebar:
         st.markdown(f"""
             <div style='text-align: center; padding: 1rem;'>
-                <h2>🏢 PALAZZO FIORINI</h2>
+                <h2>🏢 {st.session_state.get('brand_name', 'RISTORAPP')}</h2>  # <-- Default RISTORAPP
                 <p>👤 {st.session_state.username}</p>
                 <p style='color: #7f8c8d;'>{st.session_state.user_role}</p>
             </div>
