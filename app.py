@@ -2972,6 +2972,42 @@ def main():
             st.error(f"❌ Errore nel caricamento della pagina cliente: {e}")
             return
     
+    # ============================================================================
+    # FORZA LA CREAZIONE REPARTI (DEBUG)
+    # ============================================================================
+    try:
+        import sqlite3
+        from db import DB_PATH, get_db_connection, populate_initial_data
+        
+        # Verifica se esistono reparti
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM reparti")
+        count = cursor.fetchone()[0]
+        conn.close()
+        
+        if count == 0:
+            st.warning("⚠️ Database in inizializzazione... Creazione reparti in corso...")
+            with get_db_connection(init_mode=True) as conn:
+                cursor = conn.cursor()
+                populate_initial_data(cursor, conn)
+            st.success("✅ Database inizializzato con successo!")
+            
+            # Verifica dopo creazione
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM reparti")
+            new_count = cursor.fetchone()[0]
+            conn.close()
+            
+            if new_count > 0:
+                st.info(f"✅ {new_count} reparti creati correttamente")
+            else:
+                st.error("❌ Errore: reparti non creati!")
+    except Exception as e:
+        st.error(f"❌ Errore durante l'inizializzazione database: {e}")
+        write_debug(f"Errore init database in main: {e}", e)
+    
     # Login normale
     if not st.session_state.logged_in:
         show_login()
