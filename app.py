@@ -68,7 +68,18 @@ try:
         TavoloService, OrdineService, PagamentoService,
         NotificaService, ReportService,
         get_database_path, create_tables, create_indexes, 
-        populate_initial_data
+        populate_initial_data,
+        # PASSO 7C - Funzioni backup
+        get_backup_list, 
+        esegui_pulizia_manuale,
+        configura_pulizia_backup,
+        carica_config_pulizia,
+        comprimi_backup,
+        crea_backup_manual,
+        elimina_backup,
+        ripristina_backup,
+        carica_config_backup,
+        configura_backup_automatico
     )
     write_debug("✅ Import da db.py riuscito!")
     
@@ -214,6 +225,45 @@ def init_database():
 
 # Inizializza il database all'avvio
 db_path = init_database()
+
+# ============================================================================
+# VERIFICA INTEGRITA' DATABASE (PASSO 4)
+# ============================================================================
+def verifica_integrita_db():
+    """Verifica che tutte le tabelle necessarie esistano"""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        tabelle_necessarie = [
+            'utenti', 'brand', 'reparti', 'categorie', 'piatti',
+            'sale', 'tavoli', 'comande', 'comandine', 'pagamenti',
+            'storico_comande', 'storico_reparti', 'storico_cassa'
+        ]
+        
+        mancanti = []
+        for tabella in tabelle_necessarie:
+            cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{tabella}'")
+            if not cursor.fetchone():
+                mancanti.append(tabella)
+        
+        conn.close()
+        
+        if mancanti:
+            write_debug(f"⚠️ Tabelle mancanti: {', '.join(mancanti)}")
+            return False
+        return True
+    except Exception as e:
+        write_debug(f"❌ Errore verifica integrità: {e}")
+        return False
+
+# Esegui verifica
+if not verifica_integrita_db():
+    st.warning("⚠️ Alcune tabelle del database sono mancanti. Esegui 'python db.py --force' per ricreare.")
+    write_debug("⚠️ Database incompleto - tabelle mancanti")
+else:
+    write_debug("✅ Verifica integrità database superata")
+
 if db_path:
     os.environ['DB_PATH'] = db_path
     write_debug(f"✅ DB_PATH impostato a: {db_path}")
@@ -321,6 +371,11 @@ def init_session_state():
         
         # Cliente
         'cliente_carrello': [],
+        
+        # Variabili per preconto (AGGIUNTE)
+        'preconto_show': False,
+        'preconto_html': None,
+        'preconto_comanda_id': None,
     }
     
     for key, value in defaults.items():
@@ -367,8 +422,13 @@ except Exception as e:
 # FUNZIONI DI UTILITY
 # ============================================================================
 def format_currency(amount):
-    """Formatta importo in euro"""
-    return f"€ {amount:.2f}"
+    """Formatta importo in euro - gestisce anche None"""
+    if amount is None:
+        return "€ 0.00"
+    try:
+        return f"€ {float(amount):.2f}"
+    except (ValueError, TypeError):
+        return "€ 0.00"
 
 def get_stato_colore(stato):
     """Restituisce colore per stato piatto"""
@@ -570,6 +630,8 @@ def show_sidebar():
                 ("💰 CASSA", "cassa"),
                 ("📊 STATS", "stats"),
                 ("📋 NOTIFICHE", "notifiche"),
+                ("💾 BACKUP", "backup"),
+                ("🧹 PULIZIA BACKUP", "pulizia_backup"),
                 ("⚙️ AMMINISTRAZIONE", "admin")
             ]
         elif st.session_state.user_role == 'CAMERIERE':
@@ -653,6 +715,11 @@ def show_dashboard():
     
     st.divider()
     
+    # CORREZIONE 2 - Statistiche reparto (AGGIUNTA QUI)
+    show_statistiche_reparto()
+    
+    st.divider()
+    
     # Grafico vendite
     st.subheader("📈 Andamento Vendite Oggi")
     
@@ -703,6 +770,25 @@ def show_dashboard():
                 st.markdown(f"Tavolo {up['numero']}: {format_currency(up['totale'])} - {ora}")
         else:
             st.info("Nessuna attività recente")
+
+
+# CORREZIONE 2 - Nuova funzione per statistiche reparto (DA AGGIUNGERE DOPO show_dashboard)
+def show_statistiche_reparto():
+    """Mostra statistiche rapide per reparto in dashboard"""
+    with st.expander("👨‍🍳 STATISTICHE REPARTI OGGI", expanded=False):
+        stats = ReportService.get_statistiche_reparti(1)  # ultimo giorno
+        
+        if stats:
+            cols = st.columns(len(stats))
+            for i, stat in enumerate(stats):
+                with cols[i]:
+                    st.metric(
+                        label=f"{stat['icona']} {stat['reparto']}",
+                        value=f"{stat['piatti_preparati']} piatti",
+                        help=f"Tempo medio: {stat.get('tempo_medio_minuti', 0)} min"
+                    )
+        else:
+            st.info("Nessun dato disponibile per oggi")
 
 # ============================================================================
 # MODULO SALA
@@ -1038,6 +1124,14 @@ def show_carrello(tavolo, comanda):
                 st.warning(f"⚠️ Stampa non disponibile: {e}")
             
             st.success("✅ Ordine inviato!")
+            
+            # Tracciamento ordine per statistiche (opzionale)
+            try:
+                from db import ReportService
+                write_debug(f"📊 Ordine {comanda_id} inviato - {len(st.session_state.carrello)} piatti")
+            except Exception as e:
+                write_debug(f"⚠️ Errore tracciamento ordine: {e}")
+            
             st.session_state.carrello = []
             st.rerun()
 
@@ -1111,11 +1205,30 @@ def show_storico_comanda(comanda):
     if piatti_attivi == 0 and totali['SERVITO'] > 0:
         st.success("✅ Tutti i piatti sono stati serviti!")
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)  # MODIFICATO: ora 3 colonne
+        
         with col1:
+            # CORREZIONE 3 - Bottone PRECONTO
+            if st.button("📄 PRECONTO", key=f"preconto_storico_{comanda['id']}"):
+                brand = esegui_query("SELECT * FROM brand WHERE id = 1", fetchone=True)
+                preconto_html, totale = genera_preconto(comanda['id'], brand)
+                st.session_state.preconto_html = preconto_html
+                st.session_state.preconto_show = True
+                st.session_state.preconto_comanda_id = comanda['id']
+                st.rerun()
+        
+        with col2:
             if st.button("💰 RICHIEDI CONTO", key="richiedi_conto", type="primary", use_container_width=True):
                 success, msg = PagamentoService.richiedi_conto(tavolo_id)
                 if success:
+                    # Archivia la comanda nello storico
+                    try:
+                        from db import OrdineService
+                        OrdineService.archivia_comanda(comanda['id'])
+                        write_debug(f"✅ Comanda {comanda['id']} archiviata")
+                    except Exception as e:
+                        write_debug(f"❌ Errore archiviazione: {e}")
+                    
                     st.success("✅ Conto richiesto!")
                     st.session_state.tavolo_attivo = None
                     st.session_state.comanda_attiva_id = None
@@ -1123,8 +1236,16 @@ def show_storico_comanda(comanda):
                 else:
                     st.error(msg)
         
-        with col2:
+        with col3:
             if st.button("🔄 LIBERA TAVOLO", key="libera_tavolo", use_container_width=True):
+                # Archivia la comanda prima di liberare il tavolo
+                try:
+                    from db import OrdineService
+                    OrdineService.archivia_comanda(comanda['id'])
+                    write_debug(f"✅ Comanda {comanda['id']} archiviata")
+                except Exception as e:
+                    write_debug(f"❌ Errore archiviazione: {e}")
+                
                 TavoloService.libera_tavolo(tavolo_id)
                 esegui_query("UPDATE comande SET stato = 'CHIUSA' WHERE id = ?", 
                             (comanda['id'],), commit=True)
@@ -1136,14 +1257,34 @@ def show_storico_comanda(comanda):
     elif piatti_attivi == 0 and totali['SERVITO'] == 0 and totali['ANNULLATO'] > 0:
         st.warning("⚠️ Tutti i piatti sono stati annullati")
         
-        if st.button("🗑️ CHIUDI TAVOLO", key="chiudi_tavolo", type="primary", use_container_width=True):
-            esegui_query("UPDATE comande SET stato = 'ANNULLATA' WHERE id = ?", 
-                        (comanda['id'],), commit=True)
-            TavoloService.libera_tavolo(tavolo_id)
-            st.success("✅ Tavolo liberato!")
-            st.session_state.tavolo_attivo = None
-            st.session_state.comanda_attiva_id = None
-            st.rerun()
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("📄 PRECONTO", key=f"preconto_annullato_{comanda['id']}"):
+                brand = esegui_query("SELECT * FROM brand WHERE id = 1", fetchone=True)
+                preconto_html, totale = genera_preconto(comanda['id'], brand)
+                st.session_state.preconto_html = preconto_html
+                st.session_state.preconto_show = True
+                st.session_state.preconto_comanda_id = comanda['id']
+                st.rerun()
+        
+        with col2:
+            if st.button("🗑️ CHIUDI TAVOLO", key="chiudi_tavolo", type="primary", use_container_width=True):
+                # Archivia la comanda come annullata
+                try:
+                    from db import OrdineService
+                    OrdineService.archivia_comanda(comanda['id'])
+                    write_debug(f"✅ Comanda {comanda['id']} archiviata (annullata)")
+                except Exception as e:
+                    write_debug(f"❌ Errore archiviazione: {e}")
+                
+                esegui_query("UPDATE comande SET stato = 'ANNULLATA' WHERE id = ?", 
+                            (comanda['id'],), commit=True)
+                TavoloService.libera_tavolo(tavolo_id)
+                st.success("✅ Tavolo liberato!")
+                st.session_state.tavolo_attivo = None
+                st.session_state.comanda_attiva_id = None
+                st.rerun
 
 def show_reparto(reparto_nome, reparto_id, mostra_tutti=False):
     """Visualizzazione comande per reparto"""
@@ -1814,6 +1955,14 @@ def show_revisione_preordine():
                         WHERE id = ?
                     """, (st.session_state.user_id, pre['id']), commit=True)
                     
+                    # Archivia la comanda nello storico (già creata)
+                    try:
+                        from db import OrdineService
+                        OrdineService.archivia_comanda(comanda_id)
+                        write_debug(f"✅ Comanda {comanda_id} archiviata da pre-ordine")
+                    except Exception as e:
+                        write_debug(f"❌ Errore archiviazione pre-ordine: {e}")
+                    
                     st.success("✅ Ordine confermato e inviato ai reparti!")
                     st.balloons()
                     # Pulisci TUTTE le variabili di sessione correlate
@@ -1928,6 +2077,105 @@ def show_cassa():
     with tab_stats:
         show_stats_cassa()
 
+# ============================================================================
+# FUNZIONE PER GENERARE PRECONTO (NUOVA)
+# ============================================================================
+def genera_preconto(comanda_id, brand_info=None):
+    """Genera HTML per preconto/scontrino"""
+    
+    if not brand_info:
+        brand_info = esegui_query("SELECT * FROM brand WHERE id = 1", fetchone=True)
+    
+    # Recupera dati comanda
+    comanda = esegui_query("""
+        SELECT c.*, t.numero as tavolo_numero, s.nome as sala_nome,
+               u.nome as cameriere_nome, u.cognome as cameriere_cognome
+        FROM comande c
+        JOIN tavoli t ON c.tavolo_id = t.id
+        JOIN sale s ON t.sala_id = s.id
+        LEFT JOIN utenti u ON c.cameriere_id = u.id
+        WHERE c.id = ?
+    """, (comanda_id,), fetchone=True)
+    
+    # Recupera piatti
+    piatti = esegui_query("""
+        SELECT * FROM comandine
+        WHERE comanda_id = ?
+        ORDER BY id
+    """, (comanda_id,), fetchall=True)
+    
+    # Calcola totali
+    totale = sum(p['qty'] * p['prezzo_unitario'] for p in piatti)
+    
+    # Intestazione
+    html = f"""
+    <div style="font-family: 'Courier New', monospace; max-width: 300px; margin: 0 auto; padding: 20px; border: 1px solid #ccc; background: white;">
+        <div style="text-align: center; margin-bottom: 20px;">
+            <h2 style="margin:0; color: #d35400;">{brand_info['nome'] if brand_info else 'RISTORAPP'}</h2>
+            <p style="margin:5px 0;">{brand_info.get('indirizzo', '')}</p>
+            <p style="margin:5px 0;">Tel: {brand_info.get('telefono', '')}</p>
+            <p style="margin:5px 0;">P.IVA: {brand_info.get('partita_iva', '')}</p>
+            <hr>
+            <h3 style="margin:10px 0;">PRECONTO</h3>
+        </div>
+    """
+    
+    # Info tavolo
+    html += f"""
+        <div style="margin-bottom: 15px;">
+            <p><strong>Tavolo:</strong> {comanda['tavolo_numero']} - {comanda['sala_nome']}</p>
+            <p><strong>Cameriere:</strong> {comanda.get('cameriere_nome', '')} {comanda.get('cameriere_cognome', '')}</p>
+            <p><strong>Data:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+        </div>
+        
+        <hr>
+        
+        <table style="width:100%; border-collapse: collapse;">
+            <tr style="border-bottom: 1px solid #ccc;">
+                <th style="text-align:left;">Articolo</th>
+                <th style="text-align:right;">Q.tà</th>
+                <th style="text-align:right;">Prezzo</th>
+                <th style="text-align:right;">Totale</th>
+            </tr>
+    """
+    
+    # Piatti
+    for p in piatti:
+        html += f"""
+            <tr>
+                <td>{p['piatto_nome']}</td>
+                <td style="text-align:right;">{p['qty']}</td>
+                <td style="text-align:right;">€ {p['prezzo_unitario']:.2f}</td>
+                <td style="text-align:right;">€ {p['qty'] * p['prezzo_unitario']:.2f}</td>
+            </tr>
+        """
+        
+        if p.get('note'):
+            html += f"""
+            <tr>
+                <td colspan="4" style="font-style:italic; color:#666; padding-left:20px;">📝 {p['note']}</td>
+            </tr>
+            """
+    
+    html += f"""
+        </table>
+        
+        <hr>
+        
+        <div style="text-align:right; font-size:1.2em;">
+            <p><strong>TOTALE: € {totale:.2f}</strong></p>
+        </div>
+        
+        <div style="text-align:center; margin-top:30px;">
+            <p>Grazie per aver scelto {brand_info['nome'] if brand_info else 'il nostro ristorante'}!</p>
+            <p>Alla prossima!</p>
+        </div>
+    </div>
+    """
+    
+    return html, totale
+
+
 def show_conti_da_pagare():
     conti = PagamentoService.get_conti_richiesti()
     
@@ -1937,7 +2185,7 @@ def show_conti_da_pagare():
     
     for conto in conti:
         with st.container(border=True):
-            col1, col2, col3 = st.columns([2, 1, 1])
+            col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
             
             with col1:
                 st.markdown(f"### 🪑 Tavolo {conto['tavolo_numero']}")
@@ -1955,9 +2203,33 @@ def show_conti_da_pagare():
                 st.caption(f"Richiesto: {ora}")
             
             with col3:
+                if st.button("📄 PRECONTO", key=f"preconto_{conto['comanda_id']}"):
+                    brand = esegui_query("SELECT * FROM brand WHERE id = 1", fetchone=True)
+                    preconto_html, totale = genera_preconto(conto['comanda_id'], brand)
+                    st.session_state.preconto_html = preconto_html
+                    st.session_state.preconto_show = True
+                    st.session_state.preconto_comanda_id = conto['comanda_id']
+                    st.rerun()
+            
+            with col4:
                 if st.button("💰 PAGA", key=f"paga_{conto['comanda_id']}"):
                     st.session_state.pagamento_in_corso = conto
                     st.rerun()
+    
+    # Mostra preconto se richiesto
+    if st.session_state.get('preconto_show', False):
+        with st.expander("🧾 PRECONTO", expanded=True):
+            st.markdown(st.session_state.preconto_html, unsafe_allow_html=True)
+            
+            col_stampa, col_chiudi = st.columns(2)
+            with col_stampa:
+                if st.button("🖨️ STAMPA / SALVA PDF"):
+                    st.info("Funzione stampa in sviluppo - puoi fare screenshot o stampare dal browser")
+            with col_chiudi:
+                if st.button("✖️ CHIUDI PRECONTO"):
+                    st.session_state.preconto_show = False
+                    st.rerun()
+
 
 def show_pagamenti():
     if not st.session_state.pagamento_in_corso:
@@ -1967,17 +2239,99 @@ def show_pagamenti():
     conto = st.session_state.pagamento_in_corso
     st.subheader(f"💰 Pagamento Tavolo {conto['tavolo_numero']}")
     
-    metodo = st.radio("Metodo di pagamento", ["💵 Contanti", "💳 Carta", "🏦 Bancomat", "🔄 Misto", "💰 Altro"], horizontal=True)
+    # Mostra dettaglio comanda
+    with st.expander("📋 DETTAGLIO COMANDA", expanded=True):
+        piatti = OrdineService.get_piatti_comanda(conto['comanda_id'])
+        totale_calcolato = 0
+        for p in piatti:
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                st.write(f"{p['qty']}x {p['piatto_nome']}")
+            with col2:
+                st.write(f"€{p['prezzo_unitario']:.2f}")
+            with col3:
+                importo = p['qty'] * p['prezzo_unitario']
+                st.write(f"**€{importo:.2f}**")
+                totale_calcolato += importo
+        
+        st.markdown("---")
+        st.markdown(f"### TOTALE: € {totale_calcolato:.2f}")
     
-    if st.button("✅ CONFERMA PAGAMENTO", type="primary"):
-        success = PagamentoService.registra_pagamento(
-            conto['comanda_id'], 'CONTANTI',
-            contanti=conto['totale'], operatore_id=st.session_state.user_id
-        )
-        if success:
-            st.success("✅ Pagamento registrato!")
+    st.markdown("---")
+    st.markdown("### 💳 SUDDIVISIONE PAGAMENTO")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        contanti = st.number_input("💵 Contanti", min_value=0.0, step=5.0, value=0.0, format="%.2f", key="contanti_input")
+        carta = st.number_input("💳 Carta", min_value=0.0, step=5.0, value=0.0, format="%.2f", key="carta_input")
+    
+    with col2:
+        bancomat = st.number_input("🏦 Bancomat", min_value=0.0, step=5.0, value=0.0, format="%.2f", key="bancomat_input")
+        altri = st.number_input("💰 Altro", min_value=0.0, step=5.0, value=0.0, format="%.2f", key="altri_input")
+    
+    totale_inserito = contanti + carta + bancomat + altri
+    differenza = totale_inserito - totale_calcolato
+    
+    # Mostra riepilogo
+    col_res1, col_res2, col_res3 = st.columns(3)
+    with col_res1:
+        st.metric("Totale da pagare", f"€ {totale_calcolato:.2f}")
+    with col_res2:
+        st.metric("Totale inserito", f"€ {totale_inserito:.2f}")
+    with col_res3:
+        if differenza >= 0:
+            st.metric("Resto", f"€ {differenza:.2f}", delta_color="off")
+        else:
+            st.error(f"Mancano € {abs(differenza):.2f}")
+    
+    st.markdown("---")
+    
+    col_annulla, col_conferma = st.columns(2)
+    
+    with col_annulla:
+        if st.button("❌ ANNULLA", use_container_width=True):
             st.session_state.pagamento_in_corso = None
             st.rerun()
+    
+    with col_conferma:
+        if st.button("✅ CONFERMA PAGAMENTO", type="primary", use_container_width=True, 
+                    disabled=(abs(differenza) > 0.01)):
+            if abs(differenza) <= 0.01:
+                # Determina metodo prevalente
+                if contanti == totale_calcolato:
+                    metodo = "CONTANTI"
+                elif carta == totale_calcolato:
+                    metodo = "CARTA"
+                elif bancomat == totale_calcolato:
+                    metodo = "BANCOMAT"
+                else:
+                    metodo = "MISTO"
+                
+                success = PagamentoService.registra_pagamento(
+                    conto['comanda_id'], 
+                    metodo,
+                    contanti=contanti,
+                    carta=carta,
+                    bancomat=bancomat,
+                    altri=altri,
+                    operatore_id=st.session_state.user_id
+                )
+                
+                if success:
+                    # Archivia nello storico
+                    try:
+                        from db import OrdineService, ReportService
+                        OrdineService.archivia_comanda(conto['comanda_id'])
+                        ReportService.aggiorna_storico_cassa()
+                    except Exception as e:
+                        write_debug(f"Errore archiviazione storico: {e}")
+                    
+                    st.success("✅ Pagamento registrato!")
+                    st.session_state.pagamento_in_corso = None
+                    time.sleep(2)
+                    st.rerun()
+
 
 def show_stats_cassa():
     st.subheader("📊 Statistiche Cassa")
@@ -1985,13 +2339,14 @@ def show_stats_cassa():
     st.metric("💰 Incasso Oggi", format_currency(stats['incasso_totale']))
     st.metric("🧾 Scontrini", stats['totale_scontrini'])
 
+
 # ============================================================================
 # MODULO AMMINISTRAZIONE
 # ============================================================================
 def show_amministrazione():
     st.title("⚙️ Amministrazione")
     
-    tabs = st.tabs(["🏢 BRAND", "👥 UTENTI", "🍽️ MENU", "🖨️ STAMPANTI", "📱 QR CODE", "🔄 BACKUP"])
+    tabs = st.tabs(["🏢 BRAND", "👥 UTENTI", "🍽️ MENU", "📊 REPORT", "🖨️ STAMPANTI", "📱 QR CODE", "🔄 BACKUP", "🧹 PULIZIA"])
     
     with tabs[0]:
         show_gestione_brand()
@@ -2000,11 +2355,15 @@ def show_amministrazione():
     with tabs[2]:
         show_gestione_menu()
     with tabs[3]:
-        show_gestione_stampanti()
+        show_report_amministrazione()
     with tabs[4]:
-        show_qr_code_generator()
+        show_gestione_stampanti()
     with tabs[5]:
+        show_qr_code_generator()
+    with tabs[6]:
         show_backup()
+    with tabs[7]:
+        mostra_pulizia_backup()
 
 
 def show_gestione_utenti():
@@ -2015,7 +2374,149 @@ def show_gestione_utenti():
 
 
 # ============================================================================
-# GESTIONE BRAND (DA AGGIUNGERE DOPO show_gestione_utenti)
+# REPORT AMMINISTRAZIONE (CON PASSO 5 - ESPORTAZIONE CSV/JSON)
+# ============================================================================
+def show_report_amministrazione():
+    st.markdown("### 📊 REPORT AMMINISTRATIVI")
+    
+    tab_giornaliero, tab_reparti, tab_tavoli, tab_cassa = st.tabs([
+        "📅 GIORNALIERO", "👨‍🍳 REPARTI", "🪑 TAVOLI", "💰 CASSA"
+    ])
+    
+    with tab_giornaliero:
+        st.subheader("Report Giornaliero")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            data_inizio = st.date_input("Data inizio", value=date.today() - timedelta(days=7))
+        with col2:
+            data_fine = st.date_input("Data fine", value=date.today())
+        
+        if st.button("🔄 GENERA REPORT", key="gen_report"):
+            report = ReportService.get_report_giornaliero(
+                data_inizio.isoformat(), 
+                data_fine.isoformat()
+            )
+            
+            if report:
+                df = pd.DataFrame(report)
+                # Formatta colonne
+                for col in ['incasso_totale', 'contanti', 'carta', 'bancomat', 'altri', 'scontrino_medio']:
+                    if col in df.columns:
+                        df[col] = df[col].apply(lambda x: f"€ {x:.2f}")
+                
+                st.dataframe(df, use_container_width=True)
+                
+                # Grafico
+                st.subheader("Andamento Incassi")
+                df_chart = pd.DataFrame(report)
+                st.bar_chart(df_chart.set_index('data')['incasso_totale'])
+                
+                # PASSO 5 - Pulsanti esportazione
+                col_csv, col_json = st.columns(2)
+                with col_csv:
+                    csv = df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "📥 ESPORTA CSV",
+                        data=csv,
+                        file_name=f"report_{data_inizio}_{data_fine}.csv",
+                        mime="text/csv",
+                        key="download_csv"
+                    )
+                with col_json:
+                    json_str = df.to_json(orient='records', indent=2)
+                    st.download_button(
+                        "📥 ESPORTA JSON",
+                        data=json_str,
+                        file_name=f"report_{data_inizio}_{data_fine}.json",
+                        mime="application/json",
+                        key="download_json"
+                    )
+            else:
+                st.info("Nessun dato nel periodo selezionato")
+    
+    with tab_reparti:
+        st.subheader("Produttività Reparti")
+        
+        giorni_reparti = st.slider("Ultimi giorni", min_value=1, max_value=90, value=30, key="giorni_reparti")
+        
+        stats_reparti = ReportService.get_statistiche_reparti(giorni_reparti)
+        
+        if stats_reparti:
+            df_reparti = pd.DataFrame(stats_reparti)
+            st.dataframe(df_reparti, use_container_width=True)
+            
+            # Grafico
+            st.subheader("Piatti per Reparto")
+            st.bar_chart(df_reparti.set_index('reparto')['piatti_preparati'])
+        else:
+            st.info("Nessun dato disponibile")
+    
+    with tab_tavoli:
+        st.subheader("Storico Tavoli")
+        
+        # Selezione tavolo
+        tavoli = TavoloService.get_tutti_tavoli()
+        tavolo_options = {t['id']: f"Tavolo {t['numero']} - {t['sala_nome']}" for t in tavoli}
+        
+        tavolo_id = st.selectbox(
+            "Seleziona tavolo",
+            options=list(tavolo_options.keys()),
+            format_func=lambda x: tavolo_options[x]
+        )
+        
+        giorni_tavolo = st.slider("Giorni da visualizzare", min_value=1, max_value=90, value=30, key="giorni_tavolo")
+        
+        if tavolo_id:
+            storico = OrdineService.get_storico_tavolo(tavolo_id, giorni_tavolo)
+            
+            if storico:
+                df_storico = pd.DataFrame(storico)
+                st.dataframe(df_storico, use_container_width=True)
+                
+                # Totali
+                totale_periodo = sum(s['totale_comanda'] for s in storico)
+                num_comande = len(storico)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Totale periodo", format_currency(totale_periodo))
+                with col2:
+                    st.metric("Numero comande", num_comande)
+                with col3:
+                    media = totale_periodo/num_comande if num_comande > 0 else 0
+                    st.metric("Media per comanda", format_currency(media))
+            else:
+                st.info("Nessuno storico per questo tavolo")
+    
+    with tab_cassa:
+        st.subheader("Storico Cassa")
+        
+        giorni_cassa = st.slider("Ultimi giorni", min_value=1, max_value=90, value=7, key="giorni_cassa")
+        
+        storico = ReportService.get_storico_cassa(giorni_cassa)
+        
+        if storico:
+            df_cassa = pd.DataFrame(storico)
+            
+            # Formatta colonne
+            for col in ['incasso_contanti', 'incasso_carta', 'incasso_bancomat', 'incasso_altri', 'totale_incasso', 'scontrino_medio']:
+                if col in df_cassa.columns:
+                    df_cassa[col] = df_cassa[col].apply(lambda x: f"€ {x:.2f}")
+            
+            st.dataframe(df_cassa, use_container_width=True)
+            
+            # Grafico a stack per metodo
+            st.subheader("Suddivisione Incassi per Metodo")
+            df_metodi = pd.DataFrame(storico)
+            df_metodi_plot = df_metodi[['data', 'incasso_contanti', 'incasso_carta', 'incasso_bancomat', 'incasso_altri']]
+            st.bar_chart(df_metodi_plot.set_index('data'))
+        else:
+            st.info("Nessun dato disponibile")
+
+
+# ============================================================================
+# GESTIONE BRAND
 # ============================================================================
 def show_gestione_brand():
     """Gestione del brand e logo del ristorante"""
@@ -2861,17 +3362,290 @@ def show_ricette_segrete():
                 except Exception as e:
                     st.error(f"Errore nel leggere la ricetta: {e}")
 
+# ============================================================================
+# BACKUP E RIPRISTINO (PASSO 7B - VERSIONE COMPLETA)
+# ============================================================================
 def show_backup():
-    st.subheader("💾 Backup")
-    if st.button("🔄 CREA BACKUP"):
-        from db import backup_automatico
-        path = backup_automatico()
-        if path:
-            st.success(f"Backup creato: {path}")
+    st.subheader("💾 Gestione Backup")
+    
+    # Tabs per le diverse funzionalità
+    tab_backup, tab_restore, tab_config, tab_pulizia = st.tabs(["🔄 BACKUP", "📂 RIPRISTINA", "⚙️ CONFIGURAZIONE", "🧹 PULIZIA"])
+    
+    with tab_backup:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 📊 Stato Database")
+            
+            # Info database
+            try:
+                from db import DB_PATH
+                db_size = os.path.getsize(DB_PATH)
+                db_modified = datetime.fromtimestamp(os.path.getmtime(DB_PATH))
+                
+                st.metric("Dimensione database", f"{db_size/1024:.1f} KB" if db_size < 1024*1024 else f"{db_size/(1024*1024):.1f} MB")
+                st.caption(f"Ultima modifica: {db_modified.strftime('%d/%m/%Y %H:%M')}")
+                
+                # Conta record
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                
+                tables = ['utenti', 'piatti', 'comande', 'pagamenti']
+                for table in tables:
+                    try:
+                        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                        count = cursor.fetchone()[0]
+                        st.write(f"📋 {table}: {count} record")
+                    except:
+                        pass
+                conn.close()
+                
+            except Exception as e:
+                st.error(f"Errore lettura database: {e}")
+        
+        with col2:
+            st.markdown("### 🆕 Crea Backup")
+            
+            if st.button("🔄 CREA BACKUP MANUALE", type="primary", use_container_width=True):
+                with st.spinner("Creazione backup in corso..."):
+                    from db import crea_backup_manual
+                    path = crea_backup_manual()
+                    if path:
+                        st.success(f"✅ Backup creato con successo!")
+                        st.caption(f"File: {os.path.basename(path)}")
+                        st.balloons()
+                    else:
+                        st.error("❌ Errore durante la creazione del backup")
+            
+            st.markdown("---")
+            st.markdown("### 📋 Ultimi Backup")
+            
+            from db import get_backup_list
+            backup_list = get_backup_list()
+            
+            if not backup_list:
+                st.info("Nessun backup disponibile")
+            else:
+                for backup in backup_list[:5]:  # Mostra solo ultimi 5
+                    with st.container(border=True):
+                        col1, col2, col3 = st.columns([3, 1, 1])
+                        with col1:
+                            st.write(f"📅 {backup['timestamp'].strftime('%d/%m/%Y %H:%M')}")
+                            st.caption(backup['size_str'])
+                        with col2:
+                            if st.button("📥", key=f"download_{backup['filename']}", help="Scarica backup"):
+                                with open(backup['path'], 'rb') as f:
+                                    st.download_button(
+                                        "💾 Salva",
+                                        data=f,
+                                        file_name=backup['filename'],
+                                        mime="application/octet-stream",
+                                        key=f"download_btn_{backup['filename']}"
+                                    )
+                        with col3:
+                            if st.button("🗑️", key=f"del_{backup['filename']}", help="Elimina backup"):
+                                from db import elimina_backup
+                                success, msg = elimina_backup(backup['path'])
+                                if success:
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+    
+    with tab_restore:
+        st.markdown("### 📂 Ripristino Database")
+        st.warning("⚠️ **ATTENZIONE**: Il ripristino sovrascriverà il database corrente. Tutti i dati non salvati andranno persi.")
+        
+        from db import get_backup_list, ripristina_backup
+        backup_list = get_backup_list()
+        
+        if not backup_list:
+            st.info("Nessun backup disponibile per il ripristino")
+        else:
+            # Crea opzioni per selectbox
+            backup_options = {
+                backup['path']: f"{backup['timestamp'].strftime('%d/%m/%Y %H:%M')} - {backup['size_str']}"
+                for backup in backup_list
+            }
+            
+            selected_backup = st.selectbox(
+                "Seleziona backup da ripristinare",
+                options=list(backup_options.keys()),
+                format_func=lambda x: backup_options[x]
+            )
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔄 RIPRISTINA BACKUP", type="primary", use_container_width=True):
+                    with st.spinner("Ripristino in corso..."):
+                        success, msg = ripristina_backup(selected_backup)
+                        if success:
+                            st.success(f"✅ {msg}")
+                            st.warning("🔄 Riavvia l'app per applicare le modifiche")
+                            if st.button("🔄 RIAVVIA ORA"):
+                                st.rerun()
+                        else:
+                            st.error(f"❌ Errore: {msg}")
+            
+            with col2:
+                if st.button("❌ ANNULLA", use_container_width=True):
+                    st.rerun()
+    
+    with tab_config:
+        st.markdown("### ⚙️ Configurazione Backup Automatico")
+        
+        from db import carica_config_backup, configura_backup_automatico
+        
+        config = carica_config_backup()
+        
+        with st.form("config_backup"):
+            interval = st.number_input(
+                "Intervallo backup (ore)",
+                min_value=1,
+                max_value=168,
+                value=config['interval'],
+                help="Ogni quante ore creare un backup automatico"
+            )
+            
+            max_backups = st.number_input(
+                "Numero massimo backup",
+                min_value=1,
+                max_value=50,
+                value=config['max_backups'],
+                help="Numero massimo di backup da mantenere (i più vecchi vengono eliminati)"
+            )
+            
+            st.markdown("---")
+            st.info("📌 I backup vengono salvati nella cartella 'backup' del progetto")
+            
+            if st.form_submit_button("💾 SALVA CONFIGURAZIONE", type="primary"):
+                from db import configura_backup_automatico
+                if configura_backup_automatico(interval, max_backups):
+                    st.success("✅ Configurazione salvata!")
+                    st.rerun()
+                else:
+                    st.error("❌ Errore nel salvataggio")
+    
+    with tab_pulizia:
+        mostra_pulizia_backup()
+
+
+def mostra_pulizia_backup():
+    """Interfaccia per pulizia automatica backup"""
+    st.header("🧹 Pulizia Automatica Backup")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("⚙️ Configurazione")
+        
+        # Carica configurazione attuale
+        config = carica_config_pulizia()
+        
+        mantenere = st.number_input(
+            "Numero backup da mantenere",
+            min_value=1,
+            max_value=50,
+            value=config['mantenere']
+        )
+        
+        giorni_vecchi = st.number_input(
+            "Elimina backup più vecchi di (giorni)",
+            min_value=7,
+            max_value=365,
+            value=config['giorni_vecchi']
+        )
+        
+        auto_compress = st.checkbox(
+            "Comprimi automaticamente backup vecchi",
+            value=config['auto_compress']
+        )
+        
+        if st.button("💾 Salva Configurazione", type="primary"):
+            if configura_pulizia_backup(mantenere, giorni_vecchi, auto_compress):
+                st.success("✅ Configurazione salvata!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("❌ Errore salvataggio configurazione")
+    
+    with col2:
+        st.subheader("📊 Statistiche Backup")
+        
+        backup_list = get_backup_list()
+        if backup_list:
+            totale_backup = len(backup_list)
+            spazio_totale = sum(b['size'] for b in backup_list)
+            
+            st.metric("Totale backup", totale_backup)
+            st.metric("Spazio occupato", f"{spazio_totale/(1024*1024):.2f} MB")
+            
+            # Backup più vecchio
+            if backup_list:
+                piu_vecchio = backup_list[-1]
+                st.metric("Backup più vecchio", 
+                         piu_vecchio['timestamp'].strftime("%d/%m/%Y"),
+                         f"{piu_vecchio.get('giorni', 0)} giorni fa")
+        else:
+            st.info("Nessun backup presente")
+    
+    st.divider()
+    
+    # Sezione pulizia manuale
+    st.subheader("🔄 Pulizia Manuale")
+    
+    col3, col4, col5 = st.columns(3)
+    
+    with col3:
+        if st.button("🧹 Esegui Pulizia Standard"):
+            with st.spinner("Esecuzione pulizia in corso..."):
+                risultato = esegui_pulizia_manuale()
+                if risultato['eliminati'] > 0 or risultato['compressi'] > 0:
+                    st.success(risultato['messaggio'])
+                else:
+                    st.info("Nessuna azione necessaria")
+    
+    with col4:
+        if st.button("🗑️ Pulizia Aggressiva (mantieni 5)"):
+            with st.spinner("Esecuzione pulizia aggressiva..."):
+                risultato = esegui_pulizia_manuale(mantenere=5, giorni_vecchi=15, comprimi=True)
+                st.success(risultato['messaggio'])
+    
+    with col5:
+        if st.button("📦 Comprimi Tutti"):
+            with st.spinner("Compressione in corso..."):
+                backup_list = get_backup_list()
+                compressi = 0
+                for backup in backup_list:
+                    if not backup['filename'].endswith('.gz'):
+                        if comprimi_backup(backup['path']):
+                            compressi += 1
+                if compressi > 0:
+                    st.success(f"✅ {compressi} backup compressi")
+                else:
+                    st.info("Nessun backup da comprimere")
+    
+    # Anteprima backup
+    st.subheader("📋 Backup Attuali")
+    backup_list = get_backup_list()
+    if backup_list:
+        data = []
+        for b in backup_list[:10]:
+            data.append({
+                "File": b['filename'][:30] + "..." if len(b['filename']) > 30 else b['filename'],
+                "Data": b['timestamp'].strftime("%d/%m/%Y %H:%M"),
+                "Dimensione": b['size_str'],
+                "Stato": "📦 Compresso" if b['filename'].endswith('.gz') else "💾 Normale"
+            })
+        st.dataframe(data, use_container_width=True)
+    else:
+        st.info("Nessun backup disponibile")
+
 
 def show_gestione_stampanti():
     st.subheader("🖨️ Configurazione Stampanti")
     st.info("Funzione in sviluppo")
+
 
 def show_qr_code_generator():
     """Genera QR code per ogni tavolo con URL permanente"""
@@ -3078,7 +3852,6 @@ def main():
         write_debug(f"Errore verifica database: {e}", e)
     
     # Routing pagine
-    # Routing pagine
     pagina = st.session_state.get('pagina_corrente', 'dashboard')
     
     if pagina == 'dashboard':
@@ -3104,6 +3877,10 @@ def main():
             show_preordini()
     elif pagina == 'notifiche':
         show_notifiche()
+    elif pagina == 'backup':
+        show_backup()
+    elif pagina == 'pulizia_backup':
+        mostra_pulizia_backup()
     elif pagina == 'admin':
         show_amministrazione()
     else:

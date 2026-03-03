@@ -360,7 +360,61 @@ def create_tables(cursor):
         )
     """)
     
-    # 9. GIORNALE DI CASSA
+    # ============================================================================
+    # STORICO E REPORTISTICA (NUOVE TABELLE - DA 9 A 11)
+    # ============================================================================
+    
+    # 9. STORICO COMANDE PER TAVOLO
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS storico_comande (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comanda_id INTEGER NOT NULL,
+            tavolo_id INTEGER NOT NULL,
+            tavolo_numero INTEGER NOT NULL,
+            sala_nome TEXT NOT NULL,
+            data_apertura TIMESTAMP NOT NULL,
+            data_chiusura TIMESTAMP,
+            cameriere_nome TEXT,
+            totale_comanda REAL DEFAULT 0,
+            numero_piatti INTEGER DEFAULT 0,
+            stato TEXT DEFAULT 'COMPLETATA',
+            FOREIGN KEY (comanda_id) REFERENCES comande(id),
+            FOREIGN KEY (tavolo_id) REFERENCES tavoli(id)
+        )
+    """)
+    
+    # 10. STORICO REPARTI (produttività)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS storico_reparti (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reparto_id INTEGER NOT NULL,
+            reparto_nome TEXT NOT NULL,
+            data DATE NOT NULL,
+            ora TIME,
+            piatti_preparati INTEGER DEFAULT 0,
+            tempo_medio_preparazione INTEGER DEFAULT 0,
+            picco_ordini INTEGER DEFAULT 0,
+            FOREIGN KEY (reparto_id) REFERENCES reparti(id)
+        )
+    """)
+    
+    # 11. STORICO GIORNALIERO CASSA
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS storico_cassa (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data DATE NOT NULL UNIQUE,
+            incasso_contanti REAL DEFAULT 0,
+            incasso_carta REAL DEFAULT 0,
+            incasso_bancomat REAL DEFAULT 0,
+            incasso_altri REAL DEFAULT 0,
+            totale_incasso REAL DEFAULT 0,
+            numero_scontrini INTEGER DEFAULT 0,
+            scontrino_medio REAL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # 12. GIORNALE DI CASSA (era 9, ora 12)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS giornale_cassa (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -384,7 +438,7 @@ def create_tables(cursor):
         )
     """)
     
-    # 10. CONFIGURAZIONE STAMPANTI
+    # 13. CONFIGURAZIONE STAMPANTI (era 10, ora 13)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stampanti (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -403,7 +457,7 @@ def create_tables(cursor):
         )
     """)
     
-    # 11. LOG STAMPE
+    # 14. LOG STAMPE (era 11, ora 14)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS log_stampe (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -418,7 +472,7 @@ def create_tables(cursor):
         )
     """)
     
-    # 12. CONFIGURAZIONE APP
+    # 15. CONFIGURAZIONE APP (era 12, ora 15)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS config (
             chiave TEXT PRIMARY KEY,
@@ -429,7 +483,7 @@ def create_tables(cursor):
         )
     """)
     
-    # 13. PRE-ORDINI CLIENTI
+    # 16. PRE-ORDINI CLIENTI (era 13, ora 16)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS preordini (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -460,7 +514,7 @@ def create_tables(cursor):
         )
     """)
     
-    # 14. CLIENTI
+    # 17. CLIENTI (era 14, ora 17)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS clienti (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -811,6 +865,77 @@ class OrdineService:
         query += " ORDER BY c.timestamp_inserimento"
         
         return esegui_query(query, tuple(params), fetchall=True)
+    
+    # ============================================================================
+    # NUOVI METODI PER STORICO (da aggiungere)
+    # ============================================================================
+    
+    @staticmethod
+    def archivia_comanda(comanda_id):
+        """Archivia una comanda chiusa nello storico"""
+        try:
+            # Recupera i dati della comanda
+            comanda = esegui_query("""
+                SELECT c.*, t.numero as tavolo_numero, s.nome as sala_nome, 
+                       u.nome as cameriere_nome, u.cognome as cameriere_cognome
+                FROM comande c
+                JOIN tavoli t ON c.tavolo_id = t.id
+                JOIN sale s ON t.sala_id = s.id
+                LEFT JOIN utenti u ON c.cameriere_id = u.id
+                WHERE c.id = ?
+            """, (comanda_id,), fetchone=True)
+            
+            if not comanda:
+                logger.error(f"Comanda {comanda_id} non trovata")
+                return False
+            
+            # Calcola totale e numero piatti
+            piatti = esegui_query("""
+                SELECT 
+                    COUNT(*) as num_piatti,
+                    COALESCE(SUM(qty * prezzo_unitario), 0) as totale
+                FROM comandine
+                WHERE comanda_id = ?
+            """, (comanda_id,), fetchone=True)
+            
+            # Inserisci nello storico
+            esegui_query("""
+                INSERT OR REPLACE INTO storico_comande 
+                (comanda_id, tavolo_id, tavolo_numero, sala_nome, 
+                 data_apertura, data_chiusura, cameriere_nome,
+                 totale_comanda, numero_piatti, stato)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'COMPLETATA')
+            """, (
+                comanda_id,
+                comanda['tavolo_id'],
+                comanda['tavolo_numero'],
+                comanda['sala_nome'],
+                comanda['timestamp_apertura'] or datetime.now(),
+                datetime.now(),
+                f"{comanda.get('cameriere_nome', '')} {comanda.get('cameriere_cognome', '')}".strip(),
+                piatti['totale'] or 0,
+                piatti['num_piatti'] or 0
+            ), commit=True)
+            
+            logger.info(f"✅ Comanda {comanda_id} archiviata nello storico")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Errore archiviazione comanda {comanda_id}: {e}")
+            return False
+    
+    @staticmethod
+    def get_storico_tavolo(tavolo_id, giorni=30):
+        """Recupera storico comande per un tavolo"""
+        try:
+            return esegui_query("""
+                SELECT * FROM storico_comande
+                WHERE tavolo_id = ? AND data_apertura >= datetime('now', ?)
+                ORDER BY data_apertura DESC
+            """, (tavolo_id, f'-{giorni} days'), fetchall=True)
+        except Exception as e:
+            logger.error(f"Errore recupero storico tavolo {tavolo_id}: {e}")
+            return []
 
 
 class PagamentoService:
@@ -1028,6 +1153,120 @@ class ReportService:
             'incasso_totale': stats['incasso_totale'] or 0,
             'media_scontrino': stats['media_scontrino'] or 0
         }
+    
+    # ============================================================================
+    # NUOVI METODI PER REPORTISTICA (da aggiungere)
+    # ============================================================================
+    
+    @staticmethod
+    def aggiorna_storico_cassa():
+        """Aggiorna lo storico giornaliero della cassa"""
+        try:
+            oggi = date.today().isoformat()
+            
+            # Calcola statistiche del giorno
+            stats = esegui_query("""
+                SELECT 
+                    COALESCE(SUM(CASE WHEN metodo = 'CONTANTI' THEN totale ELSE 0 END), 0) as contanti,
+                    COALESCE(SUM(CASE WHEN metodo = 'CARTA' THEN totale ELSE 0 END), 0) as carta,
+                    COALESCE(SUM(CASE WHEN metodo = 'BANCOMAT' THEN totale ELSE 0 END), 0) as bancomat,
+                    COALESCE(SUM(CASE WHEN metodo NOT IN ('CONTANTI', 'CARTA', 'BANCOMAT') THEN totale ELSE 0 END), 0) as altri,
+                    COUNT(*) as scontrini,
+                    COALESCE(AVG(totale), 0) as media
+                FROM pagamenti
+                WHERE date(timestamp_pagamento) = date('now')
+            """, fetchone=True)
+            
+            if not stats:
+                stats = {
+                    'contanti': 0, 'carta': 0, 'bancomat': 0,
+                    'altri': 0, 'scontrini': 0, 'media': 0
+                }
+            
+            totale = stats['contanti'] + stats['carta'] + stats['bancomat'] + stats['altri']
+            
+            # Inserisci o aggiorna storico cassa
+            esegui_query("""
+                INSERT OR REPLACE INTO storico_cassa 
+                (data, incasso_contanti, incasso_carta, incasso_bancomat, 
+                 incasso_altri, totale_incasso, numero_scontrini, scontrino_medio)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                oggi,
+                stats['contanti'],
+                stats['carta'],
+                stats['bancomat'],
+                stats['altri'],
+                totale,
+                stats['scontrini'],
+                stats['media'] or 0
+            ), commit=True)
+            
+            logger.info(f"✅ Storico cassa aggiornato per {oggi}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Errore aggiornamento storico cassa: {e}")
+            return False
+    
+    @staticmethod
+    def get_storico_cassa(giorni=7):
+        """Recupera storico cassa degli ultimi giorni"""
+        try:
+            return esegui_query("""
+                SELECT * FROM storico_cassa
+                WHERE data >= date('now', ?)
+                ORDER BY data DESC
+            """, (f'-{giorni} days',), fetchall=True)
+        except Exception as e:
+            logger.error(f"Errore recupero storico cassa: {e}")
+            return []
+    
+    @staticmethod
+    def get_statistiche_reparti(giorni=30):
+        """Recupera statistiche di produttività per reparto"""
+        try:
+            return esegui_query("""
+                SELECT 
+                    r.nome as reparto,
+                    r.icona,
+                    COUNT(cmd.id) as piatti_preparati,
+                    SUM(cmd.qty) as quantita_totale,
+                    COUNT(DISTINCT date(cmd.timestamp_pronto)) as giorni_lavorativi,
+                    ROUND(AVG(cmd.minuti_consegna), 0) as tempo_medio_minuti
+                FROM comandine cmd
+                JOIN reparti r ON cmd.reparto_id = r.id
+                WHERE cmd.timestamp_pronto IS NOT NULL
+                    AND date(cmd.timestamp_pronto) >= date('now', ?)
+                GROUP BY r.id, r.nome, r.icona
+                ORDER BY piatti_preparati DESC
+            """, (f'-{giorni} days',), fetchall=True)
+        except Exception as e:
+            logger.error(f"Errore recupero statistiche reparti: {e}")
+            return []
+    
+    @staticmethod
+    def get_report_giornaliero(data_inizio, data_fine):
+        """Genera report giornaliero per un periodo"""
+        try:
+            return esegui_query("""
+                SELECT 
+                    date(timestamp_pagamento) as data,
+                    COUNT(*) as scontrini,
+                    SUM(totale) as incasso_totale,
+                    AVG(totale) as scontrino_medio,
+                    SUM(CASE WHEN metodo = 'CONTANTI' THEN totale ELSE 0 END) as contanti,
+                    SUM(CASE WHEN metodo = 'CARTA' THEN totale ELSE 0 END) as carta,
+                    SUM(CASE WHEN metodo = 'BANCOMAT' THEN totale ELSE 0 END) as bancomat,
+                    SUM(CASE WHEN metodo NOT IN ('CONTANTI', 'CARTA', 'BANCOMAT') THEN totale ELSE 0 END) as altri
+                FROM pagamenti
+                WHERE date(timestamp_pagamento) BETWEEN ? AND ?
+                GROUP BY date(timestamp_pagamento)
+                ORDER BY data DESC
+            """, (data_inizio, data_fine), fetchall=True)
+        except Exception as e:
+            logger.error(f"Errore generazione report giornaliero: {e}")
+            return []
 
 # ============================================================================
 # SERVIZIO STAMPANTI
@@ -1200,6 +1439,183 @@ def backup_automatico():
     except Exception as e:
         print(f"❌ Errore backup: {e}")
         return None
+
+
+# ============================================================================
+# BACKUP AUTOMATICO E GESTIONE BACKUP (PASSO 7 - DA INSERIRE QUI)
+# ============================================================================
+import json
+import glob
+import re
+from datetime import datetime, timedelta
+
+def get_backup_list():
+    """Restituisce la lista dei backup disponibili"""
+    backup_dir = "backup"
+    if not os.path.exists(backup_dir):
+        return []
+    
+    backup_files = glob.glob(os.path.join(backup_dir, "ristorante_backup_*.db"))
+    backup_list = []
+    
+    for file in backup_files:
+        filename = os.path.basename(file)
+        # Estrai timestamp dal nome file
+        match = re.search(r'backup_(\d{8}_\d{6})', filename)
+        if match:
+            timestamp_str = match.group(1)
+            try:
+                timestamp = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+                size = os.path.getsize(file)
+                backup_list.append({
+                    'filename': filename,
+                    'path': file,
+                    'timestamp': timestamp,
+                    'size': size,
+                    'size_str': f"{size/1024:.1f} KB" if size < 1024*1024 else f"{size/(1024*1024):.1f} MB"
+                })
+            except:
+                pass
+    
+    # Ordina per data (più recenti prima)
+    backup_list.sort(key=lambda x: x['timestamp'], reverse=True)
+    return backup_list
+
+def crea_backup_manual():
+    """Crea un backup manuale"""
+    return backup_automatico()
+
+def ripristina_backup(backup_path):
+    """Ripristina un backup"""
+    try:
+        # Verifica che il file esista
+        if not os.path.exists(backup_path):
+            return False, "File backup non trovato"
+        
+        # Crea un backup di sicurezza prima di ripristinare
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safety_path = os.path.join("backup", f"pre_restore_{timestamp}.db")
+        shutil.copy2(DB_PATH, safety_path)
+        
+        # Ripristina il backup
+        shutil.copy2(backup_path, DB_PATH)
+        
+        return True, f"Backup ripristinato da {os.path.basename(backup_path)}"
+    except Exception as e:
+        return False, str(e)
+
+def elimina_backup(backup_path):
+    """Elimina un file di backup"""
+    try:
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+            return True, "Backup eliminato"
+        return False, "File non trovato"
+    except Exception as e:
+        return False, str(e)
+
+def configura_backup_automatico(interval_hours=24, max_backups=10):
+    """Configura il backup automatico (salva le impostazioni in config)"""
+    try:
+        # Salva configurazione nel database
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Assicurati che la tabella config esista
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS config (
+                chiave TEXT PRIMARY KEY,
+                valore TEXT,
+                tipo TEXT DEFAULT 'text',
+                descrizione TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Salva impostazioni
+        cursor.execute("""
+            INSERT OR REPLACE INTO config (chiave, valore, tipo, descrizione)
+            VALUES (?, ?, ?, ?)
+        """, ('backup_interval', str(interval_hours), 'number', 'Ore tra backup automatici'))
+        
+        cursor.execute("""
+            INSERT OR REPLACE INTO config (chiave, valore, tipo, descrizione)
+            VALUES (?, ?, ?, ?)
+        """, ('backup_max', str(max_backups), 'number', 'Numero massimo di backup da mantenere'))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Errore configurazione backup: {e}")
+        return False
+
+def carica_config_backup():
+    """Carica la configurazione dei backup"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT valore FROM config WHERE chiave = 'backup_interval'")
+        interval = cursor.fetchone()
+        
+        cursor.execute("SELECT valore FROM config WHERE chiave = 'backup_max'")
+        max_backups = cursor.fetchone()
+        
+        conn.close()
+        
+        return {
+            'interval': int(interval[0]) if interval else 24,
+            'max_backups': int(max_backups[0]) if max_backups else 10
+        }
+    except:
+        return {'interval': 24, 'max_backups': 10}
+
+def pulizia_backup_automatica(max_backups=10):
+    """Mantiene solo gli ultimi N backup"""
+    try:
+        backup_list = get_backup_list()
+        if len(backup_list) <= max_backups:
+            return 0
+        
+        # Elimina i backup più vecchi
+        eliminati = 0
+        for backup in backup_list[max_backups:]:
+            if os.path.exists(backup['path']):
+                os.remove(backup['path'])
+                eliminati += 1
+        
+        return eliminati
+    except Exception as e:
+        print(f"Errore pulizia backup: {e}")
+        return 0
+
+def avvia_scheduler_backup():
+    """Avvia il thread per backup automatico"""
+    import threading
+    import time
+    
+    def backup_worker():
+        while True:
+            try:
+                config = carica_config_backup()
+                # Crea backup
+                backup_path = backup_automatico()
+                if backup_path:
+                    # Pulisci backup vecchi
+                    eliminati = pulizia_backup_automatica(config['max_backups'])
+                    print(f"✅ Backup automatico completato. Eliminati {eliminati} backup vecchi.")
+                
+                # Aspetta l'intervallo configurato
+                time.sleep(config['interval'] * 3600)
+            except Exception as e:
+                print(f"❌ Errore backup automatico: {e}")
+                time.sleep(3600)  # Riprova tra un'ora
+    
+    # Avvia thread
+    thread = threading.Thread(target=backup_worker, daemon=True)
+    thread.start()
+    return thread
 
 # ============================================================================
 # CONFIGURAZIONE APP - GESTIONE URL PUBBLICO
