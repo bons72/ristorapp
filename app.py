@@ -791,29 +791,64 @@ def show_statistiche_reparto():
             st.info("Nessun dato disponibile per oggi")
 
 # ============================================================================
-# MODULO SALA
+# MODULO SALA - VERSIONE OTTIMIZZATA CON LAYOUT DUE COLONNE
 # ============================================================================
 def show_sala():
-    st.title("🍽️ Sala - Camerieri")
+    """Gestione sala con layout due colonne (menu a sinistra, carrello a destra)"""
     
+    # Controllo piatti pronti (notifica persistente)
+    piatti_pronti_totali = esegui_query("""
+        SELECT COUNT(*) as cnt FROM comandine
+        WHERE stato = 'PRONTO'
+    """, fetchone=True)['cnt']
+    
+    if piatti_pronti_totali > 0:
+        st.warning(f"🔔 **{piatti_pronti_totali} piatti pronti da servire!**")
+        
+        # Mostra tavoli con piatti pronti
+        tavoli_con_pronti = esegui_query("""
+            SELECT DISTINCT t.id, t.numero, s.nome as sala_nome,
+                   COUNT(cmd.id) as num_pronti
+            FROM comandine cmd
+            JOIN comande c ON cmd.comanda_id = c.id
+            JOIN tavoli t ON c.tavolo_id = t.id
+            JOIN sale s ON t.sala_id = s.id
+            WHERE cmd.stato = 'PRONTO'
+            GROUP BY t.id, t.numero, s.nome
+            ORDER BY s.nome, t.numero
+        """, fetchall=True)
+        
+        if tavoli_con_pronti:
+            cols = st.columns(len(tavoli_con_pronti))
+            for i, tavolo in enumerate(tavoli_con_pronti):
+                with cols[i]:
+                    if st.button(f"🔔 Tavolo {tavolo['numero']}\n({tavolo['num_pronti']} piatti)", 
+                               key=f"vai_pronto_{tavolo['id']}"):
+                        # Vai al tavolo con piatti pronti
+                        tavoli = TavoloService.get_tutti_tavoli()
+                        for t in tavoli:
+                            if t['id'] == tavolo['id']:
+                                st.session_state.tavolo_attivo = t
+                                comanda = OrdineService.get_comande_attive(t['id'])
+                                if comanda:
+                                    st.session_state.comanda_attiva_id = comanda['id']
+                                st.rerun()
+    
+    st.divider()
+    
+    # Se nessun tavolo attivo, mostra mappa
     if st.session_state.tavolo_attivo is None:
         show_mappa_tavoli()
     else:
         show_gestione_tavolo()
 
+
 def show_mappa_tavoli():
-    """Mappa interattiva dei tavoli"""
-    
-    piatti_pronti = esegui_query("""
-        SELECT COUNT(*) as cnt FROM comandine
-        WHERE stato = 'PRONTO'
-    """, fetchone=True)['cnt']
-    
-    if piatti_pronti > 0:
-        st.info(f"🔔 {piatti_pronti} piatti pronti da servire!")
+    """Mappa interattiva dei tavoli con anteprima piatti pronti"""
     
     tavoli = TavoloService.get_tutti_tavoli()
     
+    # Raggruppa per sala
     sale = {}
     for t in tavoli:
         if t['sala_nome'] not in sale:
@@ -827,85 +862,156 @@ def show_mappa_tavoli():
         
         for i, tavolo in enumerate(tavoli_sala):
             with cols[i % 4]:
-                if tavolo['richiesta_conto'] == 1:
-                    icona = "💰"
-                    stato = "CONTO RICHIESTO"
-                elif tavolo['stato'] == 'OCCUPATO':
-                    icona = "👥"
-                    stato = "OCCUPATO"
-                else:
-                    icona = "✅"
-                    stato = "LIBERO"
-                
+                # Controlla piatti pronti per questo tavolo
                 piatti_pronti_tavolo = esegui_query("""
                     SELECT COUNT(*) as cnt FROM comandine cmd
                     JOIN comande c ON cmd.comanda_id = c.id
                     WHERE c.tavolo_id = ? AND cmd.stato = 'PRONTO'
                 """, (tavolo['id'],), fetchone=True)['cnt']
                 
-                if piatti_pronti_tavolo > 0:
+                # Determina icona e stato
+                if tavolo['richiesta_conto'] == 1:
+                    icona = "💰"
+                    bg_color = "#f39c12"
+                    stato = "CONTO RICHIESTO"
+                elif piatti_pronti_tavolo > 0:
                     icona = f"🔔 {piatti_pronti_tavolo}"
+                    bg_color = "#27ae60"
+                    stato = f"{piatti_pronti_tavolo} PRONTI"
+                elif tavolo['stato'] == 'OCCUPATO':
+                    icona = "👥"
+                    bg_color = "#3498db"
+                    stato = "OCCUPATO"
+                else:
+                    icona = "✅"
+                    bg_color = "#7f8c8d"
+                    stato = "LIBERO"
                 
+                # Bottone con stile personalizzato
                 if st.button(
-                    f"{icona}\n**Tavolo {tavolo['numero']}**",
+                    f"{icona}\n**Tavolo {tavolo['numero']}**\n{stato}",
                     key=f"tavolo_{tavolo['id']}",
                     use_container_width=True,
-                    help=stato
+                    help=f"Clicca per gestire Tavolo {tavolo['numero']}"
                 ):
                     st.session_state.tavolo_attivo = tavolo
+                    comanda = OrdineService.get_comande_attive(tavolo['id'])
+                    if comanda:
+                        st.session_state.comanda_attiva_id = comanda['id']
+                    st.session_state.carrello = []
                     st.rerun()
     
     st.divider()
     
-    conti_richiesti = PagamentoService.get_conti_richiesti()
-    if conti_richiesti:
-        with st.expander("💰 Tavoli con conto richiesto"):
-            for c in conti_richiesti:
-                st.markdown(f"Tavolo {c['tavolo_numero']} - {format_currency(c['totale'])}")
+    # Statistiche rapide
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        occupati = sum(1 for t in tavoli if t['stato'] == 'OCCUPATO')
+        st.metric("🪑 Tavoli Occupati", occupati)
+    with col2:
+        liberi = sum(1 for t in tavoli if t['stato'] == 'LIBERO')
+        st.metric("✅ Tavoli Liberi", liberi)
+    with col3:
+        conti = sum(1 for t in tavoli if t['richiesta_conto'] == 1)
+        st.metric("💰 Conti Richiesti", conti)
+
 
 def show_gestione_tavolo():
-    """Gestione ordini per tavolo selezionato"""
+    """Gestione tavolo con layout a due colonne (menu a sinistra, carrello a destra)"""
+    
     tavolo = st.session_state.tavolo_attivo
     
-    col_back, col_title, col_status = st.columns([1, 3, 1])
+    # Header con info tavolo e azioni
+    col_header1, col_header2, col_header3, col_header4 = st.columns([2, 1, 1, 1])
     
-    with col_back:
-        if st.button("⬅️ Indietro"):
+    with col_header1:
+        if st.button("⬅️ TORNA ALLA MAPPA", use_container_width=True):
             st.session_state.tavolo_attivo = None
             st.session_state.carrello = []
             st.session_state.categoria_selezionata = None
+            st.session_state.comanda_attiva_id = None
             st.rerun()
     
-    with col_title:
-        st.header(f"🍽️ Tavolo {tavolo['numero']} - {tavolo['sala_nome']}")
+    with col_header2:
+        st.markdown(f"### 🪑 Tavolo {tavolo['numero']}")
+        st.caption(f"{tavolo['sala_nome']}")
     
-    with col_status:
+    with col_header3:
+        # Verifica comanda attiva
         comanda = OrdineService.get_comande_attive(tavolo['id'])
         if comanda:
             st.session_state.comanda_attiva_id = comanda['id']
-            st.info("📋 Comanda attiva")
+            st.success("✅ Comanda attiva")
         else:
             st.session_state.comanda_attiva_id = None
+            st.warning("🆕 Nuova comanda")
     
-    if st.session_state.get('comanda_attiva_id'):
-        comanda = esegui_query("SELECT * FROM comande WHERE id = ?", 
-                               (st.session_state.comanda_attiva_id,), fetchone=True)
+    with col_header4:
+        # Piatti pronti per questo tavolo
+        if st.session_state.get('comanda_attiva_id'):
+            piatti_pronti = esegui_query("""
+                SELECT COUNT(*) as cnt FROM comandine
+                WHERE comanda_id = ? AND stato = 'PRONTO'
+            """, (st.session_state.comanda_attiva_id,), fetchone=True)['cnt']
+            
+            if piatti_pronti > 0:
+                st.info(f"🔔 {piatti_pronti} pronti")
     
-    tab_categorie, tab_carrello, tab_storico = st.tabs(["📁 CATEGORIE", "🛒 CARRELLO", "📋 STORICO"])
+    st.divider()
     
-    with tab_categorie:
+    # LAYOUT PRINCIPALE: DUE COLONNE
+    col_menu, col_carrello = st.columns([2, 1])
+    
+    with col_menu:
+        st.markdown("### 📖 MENU")
         show_categorie_piatti()
     
-    with tab_carrello:
-        show_carrello(tavolo, comanda)
+    with col_carrello:
+        st.markdown("### 🛒 COMANDA IN CORSO")
+        show_carrello(tavolo, comanda if 'comanda' in locals() else None)
     
-    with tab_storico:
-        show_storico_comanda(comanda)
+    # Sezione piatti pronti (sotto le due colonne)
+    if st.session_state.get('comanda_attiva_id'):
+        piatti_pronti_lista = esegui_query("""
+            SELECT * FROM comandine
+            WHERE comanda_id = ? AND stato = 'PRONTO'
+            ORDER BY timestamp_pronto
+        """, (st.session_state.comanda_attiva_id,), fetchall=True)
+        
+        if piatti_pronti_lista:
+            st.divider()
+            st.markdown("### 🔔 PIATTI PRONTI DA SERVIRE")
+            
+            # Griglia piatti pronti
+            cols = st.columns(min(len(piatti_pronti_lista), 4))
+            for i, piatto in enumerate(piatti_pronti_lista):
+                with cols[i % 4]:
+                    with st.container(border=True):
+                        st.markdown(f"**{piatto['piatto_nome']}**")
+                        st.caption(f"Qtà: {piatto['qty']}")
+                        if piatto.get('note'):
+                            # Prova a parsare JSON per note e variazioni
+                            try:
+                                note_data = json.loads(piatto['note'])
+                                if note_data.get('note'):
+                                    st.caption(f"📝 {note_data['note']}")
+                                if note_data.get('variazioni'):
+                                    for v in note_data['variazioni']:
+                                        st.caption(f"✨ {v['nome']}")
+                            except:
+                                if piatto['note'] and not piatto['note'].startswith('{'):
+                                    st.caption(f"📝 {piatto['note']}")
+                        
+                        if st.button("✅ SERVI", key=f"servi_{piatto['id']}"):
+                            OrdineService.aggiorna_stato(piatto['id'], 'SERVITO', st.session_state.user_id)
+                            st.rerun()
+
 
 def show_categorie_piatti():
-    """Mostra categorie e piatti con selezione tempo servizio"""
+    """Mostra categorie e piatti con selezione diretta e variazioni"""
     
-    if st.session_state.categoria_selezionata is None:
+    # Se nessuna categoria selezionata, mostra griglia categorie
+    if st.session_state.get('categoria_selezionata') is None:
         categorie = esegui_query("""
             SELECT c.*, COUNT(p.id) as num_piatti
             FROM categorie c
@@ -915,207 +1021,293 @@ def show_categorie_piatti():
             ORDER BY c.ordine
         """, fetchall=True)
         
+        # Griglia categorie 2 colonne
         cols = st.columns(2)
         for i, cat in enumerate(categorie):
             with cols[i % 2]:
                 if st.button(
-                    f"**{cat['nome']}**\n{cat['num_piatti']} piatti",
+                    f"{cat.get('icona', '🍽️')} **{cat['nome']}**\n{cat['num_piatti']} piatti",
                     key=f"cat_{cat['id']}",
                     use_container_width=True
                 ):
                     st.session_state.categoria_selezionata = cat
                     st.rerun()
+    
+    # Altrimenti mostra piatti della categoria selezionata
     else:
         cat = st.session_state.categoria_selezionata
         
+        # Header categoria con pulsante indietro
         col_back, col_title = st.columns([1, 3])
         with col_back:
-            if st.button("⬅️ Indietro", key="back_from_categories"):
+            if st.button("⬅️ INDIETRO", key="back_from_categories"):
                 st.session_state.categoria_selezionata = None
                 st.rerun()
         with col_title:
-            st.subheader(f"🍽️ {cat['nome']}")
+            st.markdown(f"### {cat.get('icona', '🍽️')} {cat['nome']}")
         
+        # Recupera piatti della categoria
         piatti = esegui_query("""
             SELECT * FROM piatti
             WHERE categoria_id = ? AND disponibile = 1
-            ORDER BY nome
+            ORDER BY ordine, nome
         """, (cat['id'],), fetchall=True)
         
         if not piatti:
             st.info("Nessun piatto disponibile in questa categoria")
             return
         
-        cols = st.columns(2)
-        for i, piatto in enumerate(piatti):
-            with cols[i % 2]:
-                with st.container(border=True):
-                    st.markdown(f"**{piatto['nome']}**")
-                    st.caption(f"💰 {format_currency(piatto['prezzo'])}")
-                    
-                    qty = st.number_input(
-                        "Qtà",
-                        min_value=1,
-                        max_value=10,
-                        value=1,
-                        key=f"qty_{piatto['id']}",
-                        label_visibility="collapsed"
-                    )
-                    
-                    st.markdown("---")
-                    st.markdown("**⏱️ Tempo di servizio**")
-                    
-                    opzioni_tempo = ["TEMPO 1", "TEMPO 2", "TEMPO 3", "TEMPO 4"]
-                    
-                    tempo_map = {
-                        "TEMPO 1": {"codice": "TEMPO1", "minuti": 0},
-                        "TEMPO 2": {"codice": "TEMPO2", "minuti": 10},
-                        "TEMPO 3": {"codice": "TEMPO3", "minuti": 20},
-                        "TEMPO 4": {"codice": "TEMPO4", "minuti": 30}
-                    }
-                    
-                    nome_cat = cat['nome'].upper()
-                    default_tempo = "TEMPO 2"
-                    
-                    if 'ANTIPASTO' in nome_cat or 'BEVANDE' in nome_cat:
-                        default_tempo = "TEMPO 1"
-                    elif 'PRIMO' in nome_cat or 'PASTA' in nome_cat:
-                        default_tempo = "TEMPO 2"
-                    elif 'SECONDO' in nome_cat or 'CARNE' in nome_cat:
-                        default_tempo = "TEMPO 3"
-                    elif 'DOLCE' in nome_cat:
-                        default_tempo = "TEMPO 4"
-                    
-                    default_index = opzioni_tempo.index(default_tempo)
-                    
-                    selected_tempo_label = st.radio(
-                        "Seleziona il tempo",
-                        options=opzioni_tempo,
-                        key=f"tempo_{piatto['id']}",
-                        label_visibility="collapsed",
-                        index=default_index,
-                        horizontal=True
-                    )
-                    
-                    if st.button("➕ AGGIUNGI", key=f"add_{piatto['id']}", use_container_width=True):
-                        tempo_data = tempo_map[selected_tempo_label]
-                        
-                        st.session_state.carrello.append({
-                            'id': piatto['id'],
-                            'nome': piatto['nome'],
-                            'prezzo': piatto['prezzo'],
-                            'qty': qty,
-                            'note': "",
-                            'tempo_codice': tempo_data['codice'],
-                            'tempo_nome': selected_tempo_label,
-                            'minuti_consegna': tempo_data['minuti'],
-                            'categoria': cat['nome']
-                        })
-                        st.success(f"✅ {qty}x {piatto['nome']} aggiunto!")
-                        st.rerun()
+        # Mostra piatti in griglia 2 colonne
+        for i in range(0, len(piatti), 2):
+            cols = st.columns(2)
+            for j in range(2):
+                if i + j < len(piatti):
+                    piatto = piatti[i + j]
+                    with cols[j]:
+                        with st.container(border=True):
+                            st.markdown(f"**{piatto['nome']}**")
+                            st.caption(f"💰 {format_currency(piatto['prezzo'])}")
+                            
+                            # Variazioni (se presenti)
+                            variazioni = get_variazioni_per_piatto(piatto['id'])
+                            variazioni_selezionate = []
+                            
+                            if variazioni:
+                                with st.expander("✨ Variazioni", expanded=False):
+                                    for var in variazioni:
+                                        if st.checkbox(
+                                            f"{var['nome']} (+{format_currency(var['prezzo'])})",
+                                            key=f"var_{piatto['id']}_{var['id']}_{i}_{j}"
+                                        ):
+                                            variazioni_selezionate.append(var)
+                            
+                            # Quantità
+                            qty = st.number_input(
+                                "Qtà",
+                                min_value=1,
+                                max_value=10,
+                                value=1,
+                                key=f"qty_{piatto['id']}_{i}_{j}",
+                                label_visibility="collapsed"
+                            )
+                            
+                            # Note
+                            note = st.text_input(
+                                "📝 Note",
+                                placeholder="Es. senza cipolla",
+                                key=f"note_{piatto['id']}_{i}_{j}",
+                                label_visibility="collapsed"
+                            )
+                            
+                            # Bottone aggiungi
+                            if st.button("➕ AGGIUNGI", key=f"add_{piatto['id']}_{i}_{j}", use_container_width=True):
+                                # Determina tempo consegna in base alla categoria
+                                nome_cat = cat['nome'].upper()
+                                if 'ANTIPASTO' in nome_cat or 'BEVANDE' in nome_cat:
+                                    tempo_codice = "TEMPO1"
+                                    tempo_nome = "TEMPO 1"
+                                    minuti = 0
+                                elif 'PRIMO' in nome_cat or 'PASTA' in nome_cat:
+                                    tempo_codice = "TEMPO2"
+                                    tempo_nome = "TEMPO 2"
+                                    minuti = 10
+                                elif 'SECONDO' in nome_cat or 'CARNE' in nome_cat:
+                                    tempo_codice = "TEMPO3"
+                                    tempo_nome = "TEMPO 3"
+                                    minuti = 20
+                                elif 'DOLCE' in nome_cat:
+                                    tempo_codice = "TEMPO4"
+                                    tempo_nome = "TEMPO 4"
+                                    minuti = 30
+                                else:
+                                    tempo_codice = "TEMPO2"
+                                    tempo_nome = "TEMPO 2"
+                                    minuti = 10
+                                
+                                # Aggiungi al carrello
+                                st.session_state.carrello.append({
+                                    'id': piatto['id'],
+                                    'nome': piatto['nome'],
+                                    'prezzo': piatto['prezzo'],
+                                    'qty': qty,
+                                    'note': note,
+                                    'variazioni': variazioni_selezionate,
+                                    'tempo_codice': tempo_codice,
+                                    'tempo_nome': tempo_nome,
+                                    'minuti_consegna': minuti,
+                                    'categoria': cat['nome']
+                                })
+                                st.success(f"✅ {qty}x {piatto['nome']} aggiunto!")
+                                st.rerun()
+
 
 def show_carrello(tavolo, comanda):
-    """Gestione carrello ordini con tempi servizio"""
+    """Carrello con tutte le funzioni: elimina, modifica, note, variazioni"""
     
-    if not st.session_state.carrello:
-        st.info("🛒 Carrello vuoto")
+    if not st.session_state.get('carrello'):
+        st.info("🛒 Carrello vuoto\n\nAggiungi piatti dal menu")
+        
+        # Mostra piatti già ordinati se c'è una comanda attiva
+        if comanda:
+            piatti_ordinati = OrdineService.get_piatti_comanda(comanda['id'])
+            if piatti_ordinati:
+                st.markdown("---")
+                st.markdown("### 📋 Piatti già ordinati")
+                for p in piatti_ordinati:
+                    stato_icona = {
+                        'NUOVO': '🆕', 'IN_CORSO': '👨‍🍳', 
+                        'PRONTO': '🔔', 'SERVITO': '✅', 'ANNULLATO': '❌'
+                    }.get(p['stato'], '❓')
+                    
+                    with st.container(border=True):
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.markdown(f"{stato_icona} **{p['qty']}x {p['piatto_nome']}**")
+                            if p.get('note'):
+                                # Prova a parsare JSON per note
+                                try:
+                                    note_data = json.loads(p['note'])
+                                    if note_data.get('note'):
+                                        st.caption(f"📝 {note_data['note']}")
+                                    if note_data.get('variazioni'):
+                                        for v in note_data['variazioni']:
+                                            st.caption(f"✨ {v['nome']}")
+                                except:
+                                    st.caption(f"📝 {p['note']}")
+                        with col2:
+                            st.markdown(f"**{format_currency(p['prezzo_unitario'] * p['qty'])}**")
+        
         return
     
+    # Raggruppa carrello per evitare duplicati
     carrello_raggruppato = []
     for item in st.session_state.carrello:
         trovato = False
         for esistente in carrello_raggruppato:
             if (esistente['id'] == item['id'] and 
                 esistente.get('note') == item.get('note') and
-                esistente.get('tempo_codice') == item.get('tempo_codice')):
+                str(esistente.get('variazioni')) == str(item.get('variazioni'))):
                 esistente['qty'] += item['qty']
                 trovato = True
                 break
         if not trovato:
             carrello_raggruppato.append(item.copy())
     
-    st.markdown("### 📋 Riepilogo Ordine")
-    
-    tempi_ordine = {}
-    for item in carrello_raggruppato:
-        tempo = item.get('tempo_nome', 'TEMPO 2')
-        if tempo not in tempi_ordine:
-            tempi_ordine[tempo] = []
-        tempi_ordine[tempo].append(item)
-    
+    # Mostra carrello raggruppato
     totale = 0
-    ordine_tempi = ["TEMPO 1", "TEMPO 2", "TEMPO 3", "TEMPO 4"]
-    
-    for tempo in ordine_tempi:
-        if tempo in tempi_ordine:
-            st.markdown(f"**{tempo}**")
-            for item in tempi_ordine[tempo]:
-                col1, col2, col3 = st.columns([3, 1, 1])
+    for idx, item in enumerate(carrello_raggruppato):
+        with st.container(border=True):
+            col1, col2, col3 = st.columns([3, 1, 1])
+            
+            with col1:
+                st.markdown(f"**{item['qty']}x {item['nome']}**")
                 
-                with col1:
-                    st.markdown(f"{item['qty']}x {item['nome']}")
-                with col2:
-                    importo = item['prezzo'] * item['qty']
-                    st.markdown(format_currency(importo))
-                    totale += importo
-                with col3:
-                    if st.button("🗑️", key=f"del_{id(item)}"):
-                        nuovi = []
-                        for orig in st.session_state.carrello:
-                            if not (orig['id'] == item['id'] and 
-                                  orig.get('tempo_codice') == item.get('tempo_codice')):
-                                nuovi.append(orig)
-                        st.session_state.carrello = nuovi
-                        st.rerun()
+                # Variazioni
+                if item.get('variazioni'):
+                    for v in item['variazioni']:
+                        st.caption(f"  ✦ {v['nome']} (+{format_currency(v['prezzo'])})")
+                
+                # Note
+                if item.get('note'):
+                    st.caption(f"📝 {item['note']}")
+                
+                # Tempo
+                st.caption(f"⏱️ {item.get('tempo_nome', 'TEMPO 2')}")
+            
+            with col2:
+                # Calcola prezzo con variazioni
+                prezzo_base = item['prezzo'] * item['qty']
+                prezzo_variazioni = sum(v['prezzo'] * item['qty'] for v in item.get('variazioni', []))
+                importo_totale = prezzo_base + prezzo_variazioni
+                totale += importo_totale
+                
+                st.markdown(f"**{format_currency(importo_totale)}**")
+            
+            with col3:
+                # Bottone elimina
+                if st.button("🗑️", key=f"del_carrello_{idx}"):
+                    # Rimuove TUTTI gli item con stessi parametri
+                    nuovi = []
+                    for orig in st.session_state.carrello:
+                        if not (orig['id'] == item['id'] and 
+                              orig.get('note') == item.get('note') and
+                              str(orig.get('variazioni')) == str(item.get('variazioni'))):
+                            nuovi.append(orig)
+                    st.session_state.carrello = nuovi
+                    st.rerun()
     
     st.markdown(f"### Totale: {format_currency(totale)}")
     
-    col1, col2 = st.columns(2)
+    # Bottoni azione
+    col_svuota, col_invia = st.columns(2)
     
-    with col1:
-        if st.button("🗑️ SVUOTA", key="svuota_carrello", use_container_width=True):
+    with col_svuota:
+        if st.button("🗑️ SVUOTA CARRELLO", use_container_width=True):
             st.session_state.carrello = []
             st.rerun()
     
-    with col2:
-        if st.button("🚀 INVIA", key="invia_ordine", type="primary", use_container_width=True):
+    with col_invia:
+        if st.button("🚀 INVIA IN CUCINA", type="primary", use_container_width=True):
             if not comanda:
+                # Crea nuova comanda
                 comanda_id = TavoloService.occupa_tavolo(tavolo['id'], st.session_state.user_id)
             else:
                 comanda_id = comanda['id']
             
+            # Raccogli piatti per reparto (per stampa)
             piatti_per_reparto = {}
             
             for item in st.session_state.carrello:
+                # Calcola prezzo con variazioni
+                prezzo_finale = item['prezzo']
+                if item.get('variazioni'):
+                    prezzo_finale += sum(v['prezzo'] for v in item['variazioni'])
+                
+                # Determina reparto
                 piatto_info = esegui_query("""
-                    SELECT p.*, c.reparto_id 
+                    SELECT c.reparto_id 
                     FROM piatti p
                     JOIN categorie c ON p.categoria_id = c.id
                     WHERE p.id = ?
                 """, (item['id'],), fetchone=True)
                 
-                if piatto_info:
-                    reparto_id = piatto_info['reparto_id']
-                    
-                    esegui_query("""
-                        INSERT INTO comandine 
-                        (comanda_id, piatto_id, piatto_nome, qty, prezzo_unitario, 
-                         note, stato, reparto_id, tempo_consegna, minuti_consegna)
-                        VALUES (?, ?, ?, ?, ?, ?, 'NUOVO', ?, ?, ?)
-                    """, (comanda_id, item['id'], item['nome'], item['qty'], item['prezzo'],
-                          item.get('note', ''), reparto_id, 
-                          item.get('tempo_codice', 'TEMPO2'),
-                          item.get('minuti_consegna', 10)), commit=True)
-                    
-                    if reparto_id not in piatti_per_reparto:
-                        piatti_per_reparto[reparto_id] = []
-                    
-                    piatti_per_reparto[reparto_id].append({
-                        'piatto_nome': f"{item['nome']} [{item.get('tempo_nome', 'TEMPO 2')}]",
-                        'qty': item['qty'],
-                        'note': item.get('note', '')
-                    })
+                reparto_id = piatto_info['reparto_id'] if piatto_info else 1
+                
+                # Prepara note come JSON se ci sono variazioni
+                note_json = json.dumps({
+                    'note': item.get('note', ''),
+                    'variazioni': item.get('variazioni', [])
+                }) if item.get('variazioni') or item.get('note') else item.get('note', '')
+                
+                # Inserisci commandina
+                esegui_query("""
+                    INSERT INTO comandine 
+                    (comanda_id, piatto_id, piatto_nome, qty, prezzo_unitario, 
+                     note, stato, reparto_id, tempo_consegna, minuti_consegna)
+                    VALUES (?, ?, ?, ?, ?, ?, 'NUOVO', ?, ?, ?)
+                """, (
+                    comanda_id, 
+                    item['id'], 
+                    item['nome'], 
+                    item['qty'], 
+                    prezzo_finale,
+                    note_json, 
+                    reparto_id, 
+                    item.get('tempo_codice', 'TEMPO2'),
+                    item.get('minuti_consegna', 10)
+                ), commit=True)
+                
+                # Raccogli per stampa
+                if reparto_id not in piatti_per_reparto:
+                    piatti_per_reparto[reparto_id] = []
+                
+                piatti_per_reparto[reparto_id].append({
+                    'piatto_nome': f"{item['nome']}" + (f" (con variazioni)" if item.get('variazioni') else ""),
+                    'qty': item['qty'],
+                    'note': note_json
+                })
             
+            # Stampa automatica
             try:
                 from db import StampanteService
                 for reparto_id, piatti in piatti_per_reparto.items():
@@ -1123,17 +1315,18 @@ def show_carrello(tavolo, comanda):
             except Exception as e:
                 st.warning(f"⚠️ Stampa non disponibile: {e}")
             
-            st.success("✅ Ordine inviato!")
+            st.success("✅ Ordine inviato in cucina!")
             
-            # Tracciamento ordine per statistiche (opzionale)
-            try:
-                from db import ReportService
-                write_debug(f"📊 Ordine {comanda_id} inviato - {len(st.session_state.carrello)} piatti")
-            except Exception as e:
-                write_debug(f"⚠️ Errore tracciamento ordine: {e}")
-            
+            # SVUOTA CARRELLO E TORNA ALLA MAPPA
             st.session_state.carrello = []
+            st.session_state.categoria_selezionata = None
+            st.session_state.tavolo_attivo = None
+            st.session_state.comanda_attiva_id = None
+            
+            st.info("🔄 Reindirizzamento alla sala...")
+            time.sleep(2)
             st.rerun()
+
 
 def show_storico_comanda(comanda):
     """Mostra storico piatti della comanda"""
@@ -1180,7 +1373,16 @@ def show_storico_comanda(comanda):
             with col1:
                 st.markdown(f"**{p['qty']}x {p['piatto_nome']}**")
                 if p['note']:
-                    st.caption(f"📝 {p['note']}")
+                    # Prova a parsare JSON per note
+                    try:
+                        note_data = json.loads(p['note'])
+                        if note_data.get('note'):
+                            st.caption(f"📝 {note_data['note']}")
+                        if note_data.get('variazioni'):
+                            for v in note_data['variazioni']:
+                                st.caption(f"  ✦ {v['nome']}")
+                    except:
+                        st.caption(f"📝 {p['note']}")
             
             with col2:
                 colore = get_stato_colore(p['stato'])
@@ -1205,13 +1407,12 @@ def show_storico_comanda(comanda):
     if piatti_attivi == 0 and totali['SERVITO'] > 0:
         st.success("✅ Tutti i piatti sono stati serviti!")
         
-        col1, col2, col3 = st.columns(3)  # MODIFICATO: ora 3 colonne
+        col1, col2, col3 = st.columns(3)
         
         with col1:
-            # CORREZIONE 3 - Bottone PRECONTO
             if st.button("📄 PRECONTO", key=f"preconto_storico_{comanda['id']}"):
                 brand = esegui_query("SELECT * FROM brand WHERE id = 1", fetchone=True)
-                preconto_html, totale = genera_preconto(comanda['id'], brand)
+                preconto_html, totale = genera_preconto(comanda['id'], brand, "PRECONTO")
                 st.session_state.preconto_html = preconto_html
                 st.session_state.preconto_show = True
                 st.session_state.preconto_comanda_id = comanda['id']
@@ -1221,11 +1422,9 @@ def show_storico_comanda(comanda):
             if st.button("💰 RICHIEDI CONTO", key="richiedi_conto", type="primary", use_container_width=True):
                 success, msg = PagamentoService.richiedi_conto(tavolo_id)
                 if success:
-                    # Archivia la comanda nello storico
                     try:
                         from db import OrdineService
                         OrdineService.archivia_comanda(comanda['id'])
-                        write_debug(f"✅ Comanda {comanda['id']} archiviata")
                     except Exception as e:
                         write_debug(f"❌ Errore archiviazione: {e}")
                     
@@ -1238,11 +1437,9 @@ def show_storico_comanda(comanda):
         
         with col3:
             if st.button("🔄 LIBERA TAVOLO", key="libera_tavolo", use_container_width=True):
-                # Archivia la comanda prima di liberare il tavolo
                 try:
                     from db import OrdineService
                     OrdineService.archivia_comanda(comanda['id'])
-                    write_debug(f"✅ Comanda {comanda['id']} archiviata")
                 except Exception as e:
                     write_debug(f"❌ Errore archiviazione: {e}")
                 
@@ -1262,7 +1459,7 @@ def show_storico_comanda(comanda):
         with col1:
             if st.button("📄 PRECONTO", key=f"preconto_annullato_{comanda['id']}"):
                 brand = esegui_query("SELECT * FROM brand WHERE id = 1", fetchone=True)
-                preconto_html, totale = genera_preconto(comanda['id'], brand)
+                preconto_html, totale = genera_preconto(comanda['id'], brand, "PRECONTO")
                 st.session_state.preconto_html = preconto_html
                 st.session_state.preconto_show = True
                 st.session_state.preconto_comanda_id = comanda['id']
@@ -1270,11 +1467,9 @@ def show_storico_comanda(comanda):
         
         with col2:
             if st.button("🗑️ CHIUDI TAVOLO", key="chiudi_tavolo", type="primary", use_container_width=True):
-                # Archivia la comanda come annullata
                 try:
                     from db import OrdineService
                     OrdineService.archivia_comanda(comanda['id'])
-                    write_debug(f"✅ Comanda {comanda['id']} archiviata (annullata)")
                 except Exception as e:
                     write_debug(f"❌ Errore archiviazione: {e}")
                 
@@ -1284,7 +1479,8 @@ def show_storico_comanda(comanda):
                 st.success("✅ Tavolo liberato!")
                 st.session_state.tavolo_attivo = None
                 st.session_state.comanda_attiva_id = None
-                st.rerun
+                st.rerun()
+
 
 def show_reparto(reparto_nome, reparto_id, mostra_tutti=False):
     """Visualizzazione comande per reparto"""
@@ -1388,7 +1584,16 @@ def show_reparto(reparto_nome, reparto_id, mostra_tutti=False):
                 st.markdown(f"**Tavolo {cmd['tavolo_numero']} - {cmd['sala_nome']}**")
                 st.markdown(f"{cmd['qty']}x {cmd['piatto_nome']}")
                 if cmd['note']:
-                    st.caption(f"📝 {cmd['note']}")
+                    # Prova a parsare JSON per note
+                    try:
+                        note_data = json.loads(cmd['note'])
+                        if note_data.get('note'):
+                            st.caption(f"📝 {note_data['note']}")
+                        if note_data.get('variazioni'):
+                            for v in note_data['variazioni']:
+                                st.caption(f"  ✦ {v['nome']}")
+                    except:
+                        st.caption(f"📝 {cmd['note']}")
             
             with col2:
                 stato_icone = {
@@ -1417,6 +1622,7 @@ def show_reparto(reparto_nome, reparto_id, mostra_tutti=False):
                     if st.button("🔔", key=f"pronto_{cmd['commandina_id']}"):
                         OrdineService.aggiorna_stato(cmd['commandina_id'], 'PRONTO', st.session_state.user_id)
                         st.rerun()
+
 
 def show_ricetta_piatto(piatto_id):
     """Mostra la ricetta segreta (solo per staff autorizzato)"""
