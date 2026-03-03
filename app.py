@@ -1925,6 +1925,8 @@ def show_gestione_brand():
                             """, (nome, indirizzo, telefono, email, partita_iva), commit=True)
                     
                     st.success("✅ Brand aggiornato con successo!")
+                    # Pulisci la cache per forzare il ricaricamento dei dati in cliente.py
+                    st.cache_data.clear()
                     st.balloons()
                     st.rerun()
                 except Exception as e:
@@ -2197,6 +2199,8 @@ def show_gestione_piatti():
                             ), commit=True)
                         
                         st.success(f"✅ Piatto '{nome}' creato!")
+                        # Pulisci cache menu
+                        st.cache_data.clear()
                         st.balloons()
                         st.rerun()
                     except Exception as e:
@@ -2286,6 +2290,7 @@ def show_gestione_piatti():
                         esegui_query("UPDATE piatti SET disponibile = ? WHERE id = ?", 
                                     (0 if p['disponibile'] else 1, p['id']), commit=True)
                         st.success(f"✅ Piatto {'disabilitato' if p['disponibile'] else 'abilitato'}!")
+                        st.cache_data.clear()
                         st.rerun()
                     
                     # Bottone ELIMINA con conferma
@@ -2308,6 +2313,7 @@ def show_gestione_piatti():
                                     # Poi elimina il piatto
                                     esegui_query("DELETE FROM piatti WHERE id = ?", (p['id'],), commit=True)
                                     st.success(f"✅ Piatto '{p['nome']}' eliminato!")
+                                    st.cache_data.clear()
                                     del st.session_state[confirm_key]
                                     st.rerun()
                                 except Exception as e:
@@ -2516,7 +2522,8 @@ def show_modifica_piatto():
                     st.success(f"✅ Piatto '{nome}' aggiornato!")
                     st.balloons()
                     
-                    # Pulisci le variabili di sessione
+                    # Pulisci cache e variabili di sessione
+                    st.cache_data.clear()
                     del st.session_state.edit_piatto_id
                     if 'rimuovi_foto' in st.session_state:
                         del st.session_state['rimuovi_foto']

@@ -158,11 +158,12 @@ def create_tables(cursor):
         CREATE TABLE IF NOT EXISTS brand (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nome TEXT UNIQUE NOT NULL,
-            logo_path TEXT,
             indirizzo TEXT,
             telefono TEXT,
             email TEXT,
             partita_iva TEXT,
+            logo_data BLOB,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -510,124 +511,174 @@ def create_indexes(cursor):
     logger.info("Indici creati con successo")
 
 # ============================================================================
-# DATI INIZIALI
+# DATI INIZIALI - VERSIONE CHE NON SOVRASCRIVE
 # ============================================================================
 def populate_initial_data(cursor):
-    """Popola il database con dati di esempio"""
+    """Popola il database con dati di esempio SOLO SE LE TABELLE SONO VUOTE"""
     
-    logger.info("Popolamento dati iniziali...")
+    logger.info("Verifica dati iniziali...")
     
-    # Brand
-    cursor.execute("""
-        INSERT OR IGNORE INTO brand (id, nome, partita_iva) 
-        VALUES (1, 'PALAZZO FIORINI', '01234567890')
-    """)
-    
-    # Reparti
-    reparti = [
-        (1, 'CUCINA', '👨‍🍳', '#e74c3c', 1),
-        (2, 'BAR', '🍸', '#3498db', 2),
-        (3, 'PASTICCERIA', '🍰', '#9b59b6', 3),
-        (4, 'PIZZERIA', '🍕', '#e67e22', 4),
-    ]
-    for id, nome, icona, colore, ordine in reparti:
+    # Brand (solo se non esiste)
+    cursor.execute("SELECT COUNT(*) FROM brand")
+    if cursor.fetchone()[0] == 0:
         cursor.execute("""
-            INSERT OR IGNORE INTO reparti (id, nome, icona, colore, ordine)
-            VALUES (?, ?, ?, ?, ?)
-        """, (id, nome, icona, colore, ordine))
+            INSERT INTO brand (id, nome, partita_iva) 
+            VALUES (1, 'PALAZZO FIORINI', '01234567890')
+        """)
+        logger.info("✅ Brand default creato")
+    else:
+        logger.info("✅ Brand già esistente")
     
-    # Utenti
-    utenti = [
-        (1, 'admin', hash_password('admin123'), 'Admin', 'Super', 'SUPERADMIN'),
-        (2, 'cameriere', hash_password('123'), 'Mario', 'Rossi', 'CAMERIERE'),
-        (3, 'cucina', hash_password('123'), 'Luigi', 'Verdi', 'CUCINA'),
-        (4, 'bar', hash_password('123'), 'Giovanni', 'Bianchi', 'BAR'),
-        (5, 'cassa', hash_password('123'), 'Anna', 'Neri', 'CASSA'),
-    ]
-    for id, username, pwd_hash, nome, cognome, ruolo in utenti:
-        cursor.execute("""
-            INSERT OR IGNORE INTO utenti (id, username, password_hash, nome, cognome, ruolo, brand_id)
-            VALUES (?, ?, ?, ?, ?, ?, 1)
-        """, (id, username, pwd_hash, nome, cognome, ruolo))
-    
-    # Sale
-    sale = [
-        (1, 'SALA PRINCIPALE', '#2ecc71', 1),
-        (2, 'TERRAZZA', '#f1c40f', 2),
-        (3, 'SALA PRIVATA', '#9b59b6', 3),
-    ]
-    for id, nome, colore, ordine in sale:
-        cursor.execute("""
-            INSERT OR IGNORE INTO sale (id, nome, colore, ordine)
-            VALUES (?, ?, ?, ?)
-        """, (id, nome, colore, ordine))
-    
-    # Tavoli
-    tavoli_per_sala = {1: 8, 2: 6, 3: 4}
-    for sala_id, num_tavoli in tavoli_per_sala.items():
-        for i in range(1, num_tavoli + 1):
+    # Reparti (solo se non esistono)
+    cursor.execute("SELECT COUNT(*) FROM reparti")
+    if cursor.fetchone()[0] == 0:
+        reparti = [
+            (1, 'CUCINA', '👨‍🍳', '#e74c3c', 1),
+            (2, 'BAR', '🍸', '#3498db', 2),
+            (3, 'PASTICCERIA', '🍰', '#9b59b6', 3),
+            (4, 'PIZZERIA', '🍕', '#e67e22', 4),
+        ]
+        for id, nome, icona, colore, ordine in reparti:
             cursor.execute("""
-                INSERT OR IGNORE INTO tavoli (numero, sala_id, capienza, stato)
-                VALUES (?, ?, ?, 'LIBERO')
-            """, (i, sala_id, 4))
+                INSERT INTO reparti (id, nome, icona, colore, ordine)
+                VALUES (?, ?, ?, ?, ?)
+            """, (id, nome, icona, colore, ordine))
+        logger.info(f"✅ {len(reparti)} reparti creati")
+    else:
+        logger.info("✅ Reparti già esistenti")
     
-    # Categorie
-    categorie = [
-        (1, 'ANTIPASTI', 1, '🥗', 1),
-        (2, 'PRIMI', 1, '🍝', 2),
-        (3, 'SECONDI', 1, '🥩', 3),
-        (4, 'CONTORNI', 1, '🥦', 4),
-        (5, 'DOLCI', 3, '🍰', 5),
-        (6, 'BEVANDE', 2, '🥤', 6),
-        (7, 'PIZZE', 4, '🍕', 7),
-    ]
-    for id, nome, reparto_id, icona, ordine in categorie:
-        cursor.execute("""
-            INSERT OR IGNORE INTO categorie (id, nome, reparto_id, icona, ordine)
-            VALUES (?, ?, ?, ?, ?)
-        """, (id, nome, reparto_id, icona, ordine))
+    # Utenti (solo se non esistono)
+    cursor.execute("SELECT COUNT(*) FROM utenti")
+    if cursor.fetchone()[0] == 0:
+        utenti = [
+            (1, 'admin', hash_password('admin123'), 'Admin', 'Super', 'SUPERADMIN'),
+            (2, 'cameriere', hash_password('123'), 'Mario', 'Rossi', 'CAMERIERE'),
+            (3, 'cucina', hash_password('123'), 'Luigi', 'Verdi', 'CUCINA'),
+            (4, 'bar', hash_password('123'), 'Giovanni', 'Bianchi', 'BAR'),
+            (5, 'cassa', hash_password('123'), 'Anna', 'Neri', 'CASSA'),
+        ]
+        for id, username, pwd_hash, nome, cognome, ruolo in utenti:
+            cursor.execute("""
+                INSERT INTO utenti (id, username, password_hash, nome, cognome, ruolo, brand_id)
+                VALUES (?, ?, ?, ?, ?, ?, 1)
+            """, (id, username, pwd_hash, nome, cognome, ruolo))
+        logger.info(f"✅ {len(utenti)} utenti creati")
+    else:
+        logger.info("✅ Utenti già esistenti")
     
-    # Piatti
-    piatti = [
-        (1, 'Bruschetta', 1, 6.50, 1),
-        (2, 'Spaghetti Carbonara', 2, 12.00, 1),
-        (3, 'Tagliata di Manzo', 3, 18.00, 1),
-        (4, 'Patate al Forno', 4, 5.00, 1),
-        (5, 'Tiramisù', 5, 7.00, 1),
-        (6, 'Acqua 1L', 6, 2.50, 1),
-        (7, 'Pizza Margherita', 7, 8.00, 1),
-    ]
-    for id, nome, cat_id, prezzo, disp in piatti:
-        cursor.execute("""
-            INSERT OR IGNORE INTO piatti (id, nome, categoria_id, prezzo, disponibile)
-            VALUES (?, ?, ?, ?, ?)
-        """, (id, nome, cat_id, prezzo, disp))
+    # Sale (solo se non esistono)
+    cursor.execute("SELECT COUNT(*) FROM sale")
+    if cursor.fetchone()[0] == 0:
+        sale = [
+            (1, 'SALA PRINCIPALE', '#2ecc71', 1),
+            (2, 'TERRAZZA', '#f1c40f', 2),
+            (3, 'SALA PRIVATA', '#9b59b6', 3),
+        ]
+        for id, nome, colore, ordine in sale:
+            cursor.execute("""
+                INSERT INTO sale (id, nome, colore, ordine)
+                VALUES (?, ?, ?, ?)
+            """, (id, nome, colore, ordine))
+        logger.info(f"✅ {len(sale)} sale create")
+    else:
+        logger.info("✅ Sale già esistenti")
     
-    # Variazioni
-    variazioni = [
-        (1, 'Mozzarella extra', 1.50, 4, 1),
-        (2, 'Funghi', 1.00, 4, 2),
-        (3, 'Prosciutto', 2.00, 4, 3),
-        (4, 'Pomodoro extra', 0.50, 4, 4),
-        (5, 'Glutine', 0.00, 1, 5),
-        (6, 'Lattosio', 0.00, 1, 6),
-    ]
-    for id, nome, prezzo, reparto_id, ordine in variazioni:
-        cursor.execute("""
-            INSERT OR IGNORE INTO variazioni (id, nome, prezzo, reparto_id, ordine)
-            VALUES (?, ?, ?, ?, ?)
-        """, (id, nome, prezzo, reparto_id, ordine))
+    # Tavoli (solo se non esistono)
+    cursor.execute("SELECT COUNT(*) FROM tavoli")
+    if cursor.fetchone()[0] == 0:
+        tavoli_per_sala = {1: 8, 2: 6, 3: 4}
+        tavoli_inseriti = 0
+        for sala_id, num_tavoli in tavoli_per_sala.items():
+            for i in range(1, num_tavoli + 1):
+                cursor.execute("""
+                    INSERT INTO tavoli (numero, sala_id, capienza, stato)
+                    VALUES (?, ?, ?, 'LIBERO')
+                """, (i, sala_id, 4))
+                tavoli_inseriti += 1
+        logger.info(f"✅ {tavoli_inseriti} tavoli creati")
+    else:
+        logger.info("✅ Tavoli già esistenti")
+    
+    # Categorie (solo se non esistono)
+    cursor.execute("SELECT COUNT(*) FROM categorie")
+    if cursor.fetchone()[0] == 0:
+        categorie = [
+            (1, 'ANTIPASTI', 1, '🥗', 1),
+            (2, 'PRIMI', 1, '🍝', 2),
+            (3, 'SECONDI', 1, '🥩', 3),
+            (4, 'CONTORNI', 1, '🥦', 4),
+            (5, 'DOLCI', 3, '🍰', 5),
+            (6, 'BEVANDE', 2, '🥤', 6),
+            (7, 'PIZZE', 4, '🍕', 7),
+        ]
+        for id, nome, reparto_id, icona, ordine in categorie:
+            cursor.execute("""
+                INSERT INTO categorie (id, nome, reparto_id, icona, ordine)
+                VALUES (?, ?, ?, ?, ?)
+            """, (id, nome, reparto_id, icona, ordine))
+        logger.info(f"✅ {len(categorie)} categorie create")
+    else:
+        logger.info("✅ Categorie già esistenti")
+    
+    # Piatti (solo se non esistono)
+    cursor.execute("SELECT COUNT(*) FROM piatti")
+    if cursor.fetchone()[0] == 0:
+        piatti = [
+            (1, 'Bruschetta', 1, 6.50, 1),
+            (2, 'Spaghetti Carbonara', 2, 12.00, 1),
+            (3, 'Tagliata di Manzo', 3, 18.00, 1),
+            (4, 'Patate al Forno', 4, 5.00, 1),
+            (5, 'Tiramisù', 5, 7.00, 1),
+            (6, 'Acqua 1L', 6, 2.50, 1),
+            (7, 'Pizza Margherita', 7, 8.00, 1),
+        ]
+        for id, nome, cat_id, prezzo, disp in piatti:
+            cursor.execute("""
+                INSERT INTO piatti (id, nome, categoria_id, prezzo, disponibile)
+                VALUES (?, ?, ?, ?, ?)
+            """, (id, nome, cat_id, prezzo, disp))
+        logger.info(f"✅ {len(piatti)} piatti di default creati")
+    else:
+        # Leggi quanti piatti ci sono
+        cursor.execute("SELECT COUNT(*) FROM piatti")
+        count = cursor.fetchone()[0]
+        logger.info(f"✅ Piatti già esistenti: {count}")
+    
+    # Variazioni (solo se non esistono)
+    cursor.execute("SELECT COUNT(*) FROM variazioni")
+    if cursor.fetchone()[0] == 0:
+        variazioni = [
+            (1, 'Mozzarella extra', 1.50, 4, 1),
+            (2, 'Funghi', 1.00, 4, 2),
+            (3, 'Prosciutto', 2.00, 4, 3),
+            (4, 'Pomodoro extra', 0.50, 4, 4),
+            (5, 'Glutine', 0.00, 1, 5),
+            (6, 'Lattosio', 0.00, 1, 6),
+        ]
+        for id, nome, prezzo, reparto_id, ordine in variazioni:
+            cursor.execute("""
+                INSERT INTO variazioni (id, nome, prezzo, reparto_id, ordine)
+                VALUES (?, ?, ?, ?, ?)
+            """, (id, nome, prezzo, reparto_id, ordine))
+        logger.info(f"✅ {len(variazioni)} variazioni create")
+    else:
+        logger.info("✅ Variazioni già esistenti")
     
     # Configurazioni iniziali
-    cursor.execute("""
-        INSERT OR IGNORE INTO config (chiave, valore, tipo, descrizione)
-        VALUES 
-        ('public_url', 'http://localhost:8501', 'text', 'URL pubblico per QR code'),
-        ('ristorante_nome', 'PALAZZO FIORINI', 'text', 'Nome del ristorante'),
-        ('iva_percentuale', '10', 'number', 'Percentuale IVA')
-    """)
+    cursor.execute("SELECT COUNT(*) FROM config")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("""
+            INSERT INTO config (chiave, valore, tipo, descrizione)
+            VALUES 
+            ('public_url', 'http://localhost:8501', 'text', 'URL pubblico per QR code'),
+            ('ristorante_nome', 'PALAZZO FIORINI', 'text', 'Nome del ristorante'),
+            ('iva_percentuale', '10', 'number', 'Percentuale IVA')
+        """)
+        logger.info("✅ Configurazioni iniziali create")
+    else:
+        logger.info("✅ Configurazioni già esistenti")
     
-    logger.info("Dati iniziali caricati con successo")
+    logger.info("✅ Verifica dati iniziali completata")
 
 # ============================================================================
 # SERVICE LAYER

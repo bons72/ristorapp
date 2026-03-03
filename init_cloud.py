@@ -23,6 +23,27 @@ def init_cloud_database():
     print("=" * 60)
     print(f"📦 Database path: {db_path}")
     
+    # === DEBUG: Mostra se il database esiste ===
+    if os.path.exists(db_path):
+        print(f"✅ Database esiste. Dimensione: {os.path.getsize(db_path)} bytes")
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM piatti")
+            count = cursor.fetchone()[0]
+            print(f"📊 Piatti nel database esistente: {count}")
+            
+            cursor.execute("SELECT COUNT(*) FROM brand WHERE logo_data IS NOT NULL")
+            logo_count = cursor.fetchone()[0]
+            print(f"📊 Brand con logo: {logo_count}")
+            
+            conn.close()
+        except Exception as e:
+            print(f"⚠️ Errore lettura database: {e}")
+    else:
+        print("❌ Database NON esiste, verrà creato nuovo")
+    # === FINE DEBUG ===
+    
     # Se il database esiste già, non fare nulla
     if os.path.exists(db_path):
         print("✅ Database esistente trovato. Nessuna modifica effettuata.")
