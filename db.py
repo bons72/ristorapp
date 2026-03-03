@@ -511,55 +511,60 @@ def create_indexes(cursor):
     logger.info("Indici creati con successo")
 
 # ============================================================================
-# DATI INIZIALI - VERSIONE CON COMMIT INTERMEDI
+# DATI INIZIALI - VERSIONE CON REPARTI FORZATI
 # ============================================================================
 def populate_initial_data(cursor, conn):
-    """Popola il database con dati di esempio - CON COMMIT INTERMEDI"""
+    """Popola il database con dati di esempio - CON REPARTI FORZATI"""
     
     logger.info("=" * 60)
     logger.info("VERIFICA DATI INIZIALI")
     logger.info("=" * 60)
     
     # ========================================================================
-    # 1. REPARTI
+    # 1. REPARTI - FORZATI!
     # ========================================================================
-    logger.info("📁 STEP 1: Verifica REPARTI")
+    logger.info("📁 STEP 1: Creazione REPARTI FORZATA")
+    
+    # Prima cancella eventuali reparti esistenti per sicurezza
+    cursor.execute("DELETE FROM reparti")
+    
+    # Inserisci reparti forzatamente
+    reparti = [
+        (1, 'CUCINA', '👨‍🍳', '#e74c3c', 1),
+        (2, 'BAR', '🍸', '#3498db', 2),
+        (3, 'PASTICCERIA', '🍰', '#9b59b6', 3),
+        (4, 'PIZZERIA', '🍕', '#e67e22', 4),
+    ]
+    
+    for id, nome, icona, colore, ordine in reparti:
+        cursor.execute("""
+            INSERT OR REPLACE INTO reparti (id, nome, icona, colore, ordine, attivo)
+            VALUES (?, ?, ?, ?, ?, 1)
+        """, (id, nome, icona, colore, ordine))
+        logger.info(f"      ✅ Reparto {id}: {nome}")
+    
+    # COMMIT DOPO REPARTI
+    conn.commit()
+    logger.info("   ✅ Commit reparti completato")
+    
+    # Verifica che i reparti siano stati inseriti
     cursor.execute("SELECT COUNT(*) FROM reparti")
     count = cursor.fetchone()[0]
-    logger.info(f"   Reparti trovati: {count}")
+    logger.info(f"   Reparti presenti dopo inserimento: {count}")
     
-    if count == 0:
-        logger.info("   Creazione reparti di default...")
-        reparti = [
-            (1, 'CUCINA', '👨‍🍳', '#e74c3c', 1),
-            (2, 'BAR', '🍸', '#3498db', 2),
-            (3, 'PASTICCERIA', '🍰', '#9b59b6', 3),
-            (4, 'PIZZERIA', '🍕', '#e67e22', 4),
-        ]
-        for id, nome, icona, colore, ordine in reparti:
-            cursor.execute("""
-                INSERT OR IGNORE INTO reparti (id, nome, icona, colore, ordine, attivo)
-                VALUES (?, ?, ?, ?, ?, 1)
-            """, (id, nome, icona, colore, ordine))
-            logger.info(f"      ✅ {nome}")
-        
-        # COMMIT DOPO REPARTI
-        conn.commit()
-        logger.info("   ✅ Commit reparti completato")
-    else:
-        logger.info("   ✅ Reparti già esistenti")
+    if count < 4:
+        logger.error("❌ ERRORE: Reparti non inseriti correttamente!")
+        return
+    
+    # Mostra reparti inseriti
+    cursor.execute("SELECT id, nome FROM reparti ORDER BY id")
+    for r in cursor.fetchall():
+        logger.info(f"      📋 ID {r['id']}: {r['nome']}")
     
     # ========================================================================
     # 2. CATEGORIE
     # ========================================================================
     logger.info("📁 STEP 2: Verifica CATEGORIE")
-    
-    # Verifica che i reparti esistano
-    cursor.execute("SELECT id, nome FROM reparti ORDER BY id")
-    reparti_esistenti = cursor.fetchall()
-    logger.info(f"   Reparti disponibili: {len(reparti_esistenti)}")
-    for r in reparti_esistenti:
-        logger.info(f"      📋 ID {r['id']}: {r['nome']}")
     
     cursor.execute("SELECT COUNT(*) FROM categorie")
     count = cursor.fetchone()[0]
@@ -583,7 +588,6 @@ def populate_initial_data(cursor, conn):
             """, (id, nome, reparto_id, icona, ordine))
             logger.info(f"      ✅ {nome} (reparto_id: {reparto_id})")
         
-        # COMMIT DOPO CATEGORIE
         conn.commit()
         logger.info("   ✅ Commit categorie completato")
     else:
@@ -615,7 +619,6 @@ def populate_initial_data(cursor, conn):
             """, (id, nome, cat_id, prezzo, disp))
             logger.info(f"      ✅ {nome}")
         
-        # COMMIT DOPO PIATTI
         conn.commit()
         logger.info("   ✅ Commit piatti completato")
     else:
