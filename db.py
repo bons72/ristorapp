@@ -1021,7 +1021,13 @@ class ReportService:
                 'incasso_totale': 0,
                 'media_scontrino': 0
             }
-        return stats
+        
+        # Gestisci i valori None (quando non ci sono pagamenti)
+        return {
+            'totale_scontrini': stats['totale_scontrini'] or 0,
+            'incasso_totale': stats['incasso_totale'] or 0,
+            'media_scontrino': stats['media_scontrino'] or 0
+        }
 
 # ============================================================================
 # SERVIZIO STAMPANTI
