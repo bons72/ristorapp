@@ -2825,7 +2825,7 @@ def show_amministrazione():
     with tabs[6]:
         show_backup()
     with tabs[7]:
-        mostra_pulizia_backup()
+        mostra_pulizia_backup(prefix="admin_pulizia")
 
 
 def show_gestione_utenti():
@@ -3992,8 +3992,11 @@ def show_backup():
         mostra_pulizia_backup()
 
 
-def mostra_pulizia_backup():
-    """Interfaccia per pulizia automatica backup"""
+def mostra_pulizia_backup(prefix="pulizia"):
+    """Interfaccia per pulizia automatica backup
+    Args:
+        prefix: Prefisso per le chiavi (default 'pulizia')
+    """
     st.header("🧹 Pulizia Automatica Backup")
     
     col1, col2 = st.columns(2)
@@ -4009,7 +4012,7 @@ def mostra_pulizia_backup():
             min_value=1,
             max_value=50,
             value=config['mantenere'],
-            key="pulizia_mantenere"
+            key=f"{prefix}_mantenere"
         )
         
         giorni_vecchi = st.number_input(
@@ -4017,16 +4020,16 @@ def mostra_pulizia_backup():
             min_value=7,
             max_value=365,
             value=config['giorni_vecchi'],
-            key="pulizia_giorni"
+            key=f"{prefix}_giorni"
         )
         
         auto_compress = st.checkbox(
             "Comprimi automaticamente backup vecchi",
             value=config['auto_compress'],
-            key="pulizia_compress"
+            key=f"{prefix}_compress"
         )
         
-        if st.button("💾 Salva Configurazione", type="primary", key="pulizia_save"):
+        if st.button("💾 Salva Configurazione", type="primary", key=f"{prefix}_save"):
             if configura_pulizia_backup(mantenere, giorni_vecchi, auto_compress):
                 st.success("✅ Configurazione salvata!")
                 time.sleep(1)
@@ -4042,8 +4045,8 @@ def mostra_pulizia_backup():
             totale_backup = len(backup_list)
             spazio_totale = sum(b['size'] for b in backup_list)
             
-            st.metric("Totale backup", totale_backup, key="pulizia_metric_totale")
-            st.metric("Spazio occupato", f"{spazio_totale/(1024*1024):.2f} MB", key="pulizia_metric_spazio")
+            st.metric("Totale backup", totale_backup, key=f"{prefix}_metric_totale")
+            st.metric("Spazio occupato", f"{spazio_totale/(1024*1024):.2f} MB", key=f"{prefix}_metric_spazio")
             
             # Backup più vecchio
             if backup_list:
@@ -4051,9 +4054,9 @@ def mostra_pulizia_backup():
                 st.metric("Backup più vecchio", 
                          piu_vecchio['timestamp'].strftime("%d/%m/%Y"),
                          f"{piu_vecchio.get('giorni', 0)} giorni fa",
-                         key="pulizia_metric_vecchio")
+                         key=f"{prefix}_metric_vecchio")
         else:
-            st.info("Nessun backup presente")
+            st.info("Nessun backup presente", icon="ℹ️")
     
     st.divider()
     
@@ -4063,7 +4066,7 @@ def mostra_pulizia_backup():
     col3, col4, col5 = st.columns(3)
     
     with col3:
-        if st.button("🧹 Esegui Pulizia Standard", key="pulizia_std"):
+        if st.button("🧹 Esegui Pulizia Standard", key=f"{prefix}_std"):
             with st.spinner("Esecuzione pulizia in corso..."):
                 risultato = esegui_pulizia_manuale()
                 if risultato['eliminati'] > 0 or risultato['compressi'] > 0:
@@ -4072,13 +4075,13 @@ def mostra_pulizia_backup():
                     st.info("Nessuna azione necessaria")
     
     with col4:
-        if st.button("🗑️ Pulizia Aggressiva (mantieni 5)", key="pulizia_agg"):
+        if st.button("🗑️ Pulizia Aggressiva (mantieni 5)", key=f"{prefix}_agg"):
             with st.spinner("Esecuzione pulizia aggressiva..."):
                 risultato = esegui_pulizia_manuale(mantenere=5, giorni_vecchi=15, comprimi=True)
                 st.success(risultato['messaggio'])
     
     with col5:
-        if st.button("📦 Comprimi Tutti", key="pulizia_comp"):
+        if st.button("📦 Comprimi Tutti", key=f"{prefix}_comp"):
             with st.spinner("Compressione in corso..."):
                 backup_list = get_backup_list()
                 compressi = 0
@@ -4103,7 +4106,7 @@ def mostra_pulizia_backup():
                 "Dimensione": b['size_str'],
                 "Stato": "📦 Compresso" if b['filename'].endswith('.gz') else "💾 Normale"
             })
-        st.dataframe(data, use_container_width=True, key="pulizia_df")
+        st.dataframe(data, use_container_width=True, key=f"{prefix}_df")
     else:
         st.info("Nessun backup disponibile")
     
@@ -4369,7 +4372,7 @@ def main():
         st.sidebar.error(f"❌ Errore database: {e}")
         write_debug(f"Errore verifica database: {e}", e)
     
-    # Routing pagine
+# Routing pagine
     pagina = st.session_state.get('pagina_corrente', 'dashboard')
     
     if pagina == 'dashboard':
@@ -4398,7 +4401,7 @@ def main():
     elif pagina == 'backup':
         show_backup()
     elif pagina == 'pulizia_backup':
-        mostra_pulizia_backup()
+        mostra_pulizia_backup(prefix="menu_pulizia")
     elif pagina == 'admin':
         show_amministrazione()
     else:
