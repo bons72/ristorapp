@@ -580,7 +580,44 @@ def populate_initial_data(cursor, conn):
         logger.info("   ✅ Commit piatti OK")
         
         # ========================================================================
-        # 4. BRAND
+        # 4. SALE (AGGIUNTO - MANCAVA!)
+        # ========================================================================
+        logger.info("🏛️ Creazione SALE...")
+        cursor.execute("DELETE FROM sale")
+        sale = [
+            (1, 'SALA PRINCIPALE', '#2ecc71', 1),
+            (2, 'TERRAZZA', '#f1c40f', 2),
+            (3, 'SALA PRIVATA', '#9b59b6', 3),
+        ]
+        for id, nome, colore, ordine in sale:
+            cursor.execute("""
+                INSERT OR REPLACE INTO sale (id, nome, colore, ordine, attiva)
+                VALUES (?, ?, ?, ?, 1)
+            """, (id, nome, colore, ordine))
+            logger.info(f"   ✅ Sala {id}: {nome}")
+        conn.commit()
+        logger.info("   ✅ Commit sale OK")
+        
+        # ========================================================================
+        # 5. TAVOLI (AGGIUNTO - MANCAVA!)
+        # ========================================================================
+        logger.info("🪑 Creazione TAVOLI...")
+        cursor.execute("DELETE FROM tavoli")
+        tavoli_per_sala = {1: 8, 2: 6, 3: 4}
+        tavoli_creati = 0
+        for sala_id, num_tavoli in tavoli_per_sala.items():
+            for i in range(1, num_tavoli + 1):
+                cursor.execute("""
+                    INSERT INTO tavoli (numero, sala_id, capienza, stato)
+                    VALUES (?, ?, ?, 'LIBERO')
+                """, (i, sala_id, 4))
+                tavoli_creati += 1
+        logger.info(f"   ✅ {tavoli_creati} tavoli creati")
+        conn.commit()
+        logger.info("   ✅ Commit tavoli OK")
+        
+        # ========================================================================
+        # 6. BRAND (ERA 4, ora 6)
         # ========================================================================
         logger.info("🏢 Creazione BRAND...")
         cursor.execute("DELETE FROM brand WHERE id = 1")
@@ -592,7 +629,7 @@ def populate_initial_data(cursor, conn):
         logger.info("   ✅ Brand OK")
         
         # ========================================================================
-        # 5. UTENTI
+        # 7. UTENTI (ERA 5, ora 7)
         # ========================================================================
         logger.info("👥 Creazione UTENTI...")
         cursor.execute("DELETE FROM utenti WHERE id IN (1,2,3,4,5)")
