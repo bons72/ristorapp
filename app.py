@@ -3012,6 +3012,9 @@ def main():
             with get_db_connection(init_mode=True) as conn:
                 cursor = conn.cursor()
                 
+                # DISABILITA FOREIGN KEY TEMPORANEAMENTE
+                cursor.execute("PRAGMA foreign_keys = OFF")
+                
                 # 1. Prima i reparti
                 cursor.execute("DELETE FROM reparti")
                 reparti = [
@@ -3039,7 +3042,7 @@ def main():
                         VALUES (?, ?, ?, ?, 1)
                     """, (id, nome, colore, ordine))
                 
-                # 3. Infine i tavoli
+                # 3. Infine i tavoli (dipendono da sale)
                 cursor.execute("DELETE FROM tavoli")
                 tavoli_per_sala = {1: 8, 2: 6, 3: 4}
                 tavoli_creati = 0
@@ -3051,6 +3054,8 @@ def main():
                         """, (i, sala_id, 4))
                         tavoli_creati += 1
                 
+                # RIABILITA FOREIGN KEY
+                cursor.execute("PRAGMA foreign_keys = ON")
                 conn.commit()
             
             st.success(f"✅ Database inizializzato: 4 reparti, 3 sale, {tavoli_creati} tavoli!")
@@ -3073,44 +3078,3 @@ def main():
     except Exception as e:
         st.sidebar.error(f"❌ Errore database: {e}")
         write_debug(f"Errore init database in main: {e}", e)
-    
-    # Login normale
-    if not st.session_state.logged_in:
-        show_login()
-        return
-    
-    show_sidebar()
-    
-    # Routing pagine
-    pagina = st.session_state.get('pagina_corrente', 'dashboard')
-    
-    if pagina == 'dashboard':
-        show_dashboard()
-    elif pagina == 'sala':
-        show_sala()
-    elif pagina == 'cucina':
-        show_reparto("👨‍🍳 CUCINA", 1, mostra_tutti=True)
-    elif pagina == 'pasticceria':
-        show_reparto("🍰 PASTICCERIA", 3, mostra_tutti=False)
-    elif pagina == 'bar':
-        show_reparto("🍸 BAR", 2, mostra_tutti=False)
-    elif pagina == 'pizzeria':
-        show_reparto("🍕 PIZZERIA", 4, mostra_tutti=False)
-    elif pagina == 'cassa':
-        show_cassa()
-    elif pagina == 'stats':
-        show_stats_cassa()
-    elif pagina == 'preordini':
-        if 'preordine_in_revisione' in st.session_state:
-            show_revisione_preordine()
-        else:
-            show_preordini()
-    elif pagina == 'notifiche':
-        show_notifiche()
-    elif pagina == 'admin':
-        show_amministrazione()
-    else:
-        show_dashboard()
-
-if __name__ == "__main__":
-    main()
