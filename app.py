@@ -4110,58 +4110,6 @@ def mostra_pulizia_backup(prefix="pulizia"):
     else:
         st.info("Nessun backup disponibile")
     
-    st.divider()
-    
-    # Sezione pulizia manuale
-    st.subheader("🔄 Pulizia Manuale")
-    
-    col3, col4, col5 = st.columns(3)
-    
-    with col3:
-        if st.button("🧹 Esegui Pulizia Standard"):
-            with st.spinner("Esecuzione pulizia in corso..."):
-                risultato = esegui_pulizia_manuale()
-                if risultato['eliminati'] > 0 or risultato['compressi'] > 0:
-                    st.success(risultato['messaggio'])
-                else:
-                    st.info("Nessuna azione necessaria")
-    
-    with col4:
-        if st.button("🗑️ Pulizia Aggressiva (mantieni 5)"):
-            with st.spinner("Esecuzione pulizia aggressiva..."):
-                risultato = esegui_pulizia_manuale(mantenere=5, giorni_vecchi=15, comprimi=True)
-                st.success(risultato['messaggio'])
-    
-    with col5:
-        if st.button("📦 Comprimi Tutti"):
-            with st.spinner("Compressione in corso..."):
-                backup_list = get_backup_list()
-                compressi = 0
-                for backup in backup_list:
-                    if not backup['filename'].endswith('.gz'):
-                        if comprimi_backup(backup['path']):
-                            compressi += 1
-                if compressi > 0:
-                    st.success(f"✅ {compressi} backup compressi")
-                else:
-                    st.info("Nessun backup da comprimere")
-    
-    # Anteprima backup
-    st.subheader("📋 Backup Attuali")
-    backup_list = get_backup_list()
-    if backup_list:
-        data = []
-        for b in backup_list[:10]:
-            data.append({
-                "File": b['filename'][:30] + "..." if len(b['filename']) > 30 else b['filename'],
-                "Data": b['timestamp'].strftime("%d/%m/%Y %H:%M"),
-                "Dimensione": b['size_str'],
-                "Stato": "📦 Compresso" if b['filename'].endswith('.gz') else "💾 Normale"
-            })
-        st.dataframe(data, use_container_width=True)
-    else:
-        st.info("Nessun backup disponibile")
-
 
 def show_gestione_stampanti():
     st.subheader("🖨️ Configurazione Stampanti")
