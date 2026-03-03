@@ -2973,39 +2973,105 @@ def main():
             return
     
     # ============================================================================
-    # FORZA LA CREAZIONE REPARTI (DEBUG)
+    # FORZA LA CREAZIONE REPARTI, SALE E TAVOLI (DEBUG COMPLETO)
     # ============================================================================
     try:
         import sqlite3
         from db import DB_PATH, get_db_connection, populate_initial_data
         
-        # Verifica se esistono reparti
+        # Verifica lo stato completo del database
         conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM reparti")
-        count = cursor.fetchone()[0]
+        
+        # Conta reparti
+        cursor.execute("SELECT COUNT(*) as count FROM reparti")
+        reparti_count = cursor.fetchone()['count']
+        
+        # Conta sale
+        cursor.execute("SELECT COUNT(*) as count FROM sale")
+        sale_count = cursor.fetchone()['count']
+        
+        # Conta tavoli
+        cursor.execute("SELECT COUNT(*) as count FROM tavoli")
+        tavoli_count = cursor.fetchone()['count']
+        
         conn.close()
         
-        if count == 0:
-            st.warning("⚠️ Database in inizializzazione... Creazione reparti in corso...")
+        # Mostra stato nella sidebar
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 🗃️ STATO DATABASE")
+        st.sidebar.write(f"🏢 Reparti: {reparti_count}")
+        st.sidebar.write(f"🏛️ Sale: {sale_count}")
+        st.sidebar.write(f"🪑 Tavoli: {tavoli_count}")
+        
+        # Se manca qualcosa, inizializza tutto
+        if reparti_count == 0 or sale_count == 0 or tavoli_count == 0:
+            st.warning("⚠️ Database incompleto. Inizializzazione completa in corso...")
+            
             with get_db_connection(init_mode=True) as conn:
                 cursor = conn.cursor()
-                populate_initial_data(cursor, conn)
-            st.success("✅ Database inizializzato con successo!")
+                
+                # 1. Prima i reparti
+                cursor.execute("DELETE FROM reparti")
+                reparti = [
+                    (1, 'CUCINA', '👨‍🍳', '#e74c3c', 1),
+                    (2, 'BAR', '🍸', '#3498db', 2),
+                    (3, 'PASTICCERIA', '🍰', '#9b59b6', 3),
+                    (4, 'PIZZERIA', '🍕', '#e67e22', 4),
+                ]
+                for id, nome, icona, colore, ordine in reparti:
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO reparti (id, nome, icona, colore, ordine, attivo)
+                        VALUES (?, ?, ?, ?, ?, 1)
+                    """, (id, nome, icona, colore, ordine))
+                
+                # 2. Poi le sale
+                cursor.execute("DELETE FROM sale")
+                sale = [
+                    (1, 'SALA PRINCIPALE', '#2ecc71', 1),
+                    (2, 'TERRAZZA', '#f1c40f', 2),
+                    (3, 'SALA PRIVATA', '#9b59b6', 3),
+                ]
+                for id, nome, colore, ordine in sale:
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO sale (id, nome, colore, ordine, attiva)
+                        VALUES (?, ?, ?, ?, 1)
+                    """, (id, nome, colore, ordine))
+                
+                # 3. Infine i tavoli
+                cursor.execute("DELETE FROM tavoli")
+                tavoli_per_sala = {1: 8, 2: 6, 3: 4}
+                tavoli_creati = 0
+                for sala_id, num_tavoli in tavoli_per_sala.items():
+                    for i in range(1, num_tavoli + 1):
+                        cursor.execute("""
+                            INSERT INTO tavoli (numero, sala_id, capienza, stato)
+                            VALUES (?, ?, ?, 'LIBERO')
+                        """, (i, sala_id, 4))
+                        tavoli_creati += 1
+                
+                conn.commit()
             
-            # Verifica dopo creazione
+            st.success(f"✅ Database inizializzato: 4 reparti, 3 sale, {tavoli_creati} tavoli!")
+            
+            # Ricarica i conti
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM reparti")
-            new_count = cursor.fetchone()[0]
+            reparti_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM sale")
+            sale_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM tavoli")
+            tavoli_count = cursor.fetchone()[0]
             conn.close()
             
-            if new_count > 0:
-                st.info(f"✅ {new_count} reparti creati correttamente")
-            else:
-                st.error("❌ Errore: reparti non creati!")
+            st.sidebar.success(f"✅ Ora: {reparti_count} reparti, {sale_count} sale, {tavoli_count} tavoli")
+        else:
+            st.sidebar.success("✅ Database completo")
+            
     except Exception as e:
-        st.error(f"❌ Errore durante l'inizializzazione database: {e}")
+        st.sidebar.error(f"❌ Errore database: {e}")
         write_debug(f"Errore init database in main: {e}", e)
     
     # Login normale
