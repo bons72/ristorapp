@@ -90,8 +90,6 @@ if tavolo_id and mode == 'cliente':
         st.error(f"Errore nel caricamento del menu: {e}")
         st.stop()
 
-# ... tutto il resto del codice rimane identico ...
-
 # ============================================================================
 # INIZIALIZZAZIONE DATABASE (solo per lo staff)
 # ============================================================================
@@ -109,11 +107,11 @@ def init_database():
         write_debug(f"📦 Database path: {db_path}")
         
         # Verifica se il database esiste già e se ha le tabelle
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='utenti'")
-        table_exists = cursor.fetchone()
-        conn.close()
+        conn_check = sqlite3.connect(db_path)
+        cursor_check = conn_check.cursor()
+        cursor_check.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='utenti'")
+        table_exists = cursor_check.fetchone()
+        conn_check.close()
         
         if not table_exists:
             write_debug("🔄 Database non inizializzato. Creazione tabelle...")
@@ -125,18 +123,31 @@ def init_database():
                 # Popola i dati iniziali con gestione errori
                 try:
                     write_debug("🔄 Popolamento dati iniziali...")
-                    populate_initial_data(cursor, conn)  # <-- AGGIUNTO conn!
+                    # CHIAMATA CORRETTA CON 2 PARAMETRI
+                    populate_initial_data(cursor, conn)
                     write_debug("✅ Dati iniziali popolati con successo")
+                    
+                    # Commit esplicito dopo il popolamento
+                    conn.commit()
+                    write_debug("✅ Commit completato")
+                    
                 except Exception as e:
                     write_debug(f"❌ ERRORE nel popolamento dati iniziali: {e}", e)
-                    # Non blocchiamo l'avvio dell'app, ma logghiamo l'errore
-                    st.error(f"⚠️ Errore nel popolamento dati iniziali: {e}")
+                    # Non blocchiamo l'avvio, ma mostriamo avviso
+                    import streamlit as st
+                    st.warning(f"⚠️ Errore nel popolamento dati: {e}")
+                    
+                    # Tenta un rollback per sicurezza
+                    try:
+                        conn.rollback()
+                    except:
+                        pass
             
             write_debug("✅ Database inizializzato con successo!")
         else:
             write_debug("✅ Database già esistente e funzionante")
             
-            # Verifica rapida che i reparti esistano (log only)
+            # Verifica rapida che i reparti esistano
             try:
                 conn = sqlite3.connect(db_path)
                 cursor = conn.cursor()
@@ -146,6 +157,28 @@ def init_database():
                 write_debug(f"📊 Reparti presenti: {reparti_count}")
                 if reparti_count == 0:
                     write_debug("⚠️ Nessun reparto trovato nel database esistente!")
+                    
+                    # Tenta di popolare solo i reparti
+                    try:
+                        write_debug("🔄 Tentativo di creazione reparti in database esistente...")
+                        with get_db_connection() as conn:
+                            cursor = conn.cursor()
+                            reparti = [
+                                (1, 'CUCINA', '👨‍🍳', '#e74c3c', 1),
+                                (2, 'BAR', '🍸', '#3498db', 2),
+                                (3, 'PASTICCERIA', '🍰', '#9b59b6', 3),
+                                (4, 'PIZZERIA', '🍕', '#e67e22', 4),
+                            ]
+                            for id, nome, icona, colore, ordine in reparti:
+                                cursor.execute("""
+                                    INSERT OR REPLACE INTO reparti (id, nome, icona, colore, ordine, attivo)
+                                    VALUES (?, ?, ?, ?, ?, 1)
+                                """, (id, nome, icona, colore, ordine))
+                            conn.commit()
+                            write_debug("✅ Reparti creati con successo!")
+                    except Exception as e2:
+                        write_debug(f"⚠️ Errore creazione reparti: {e2}")
+                        
             except Exception as e:
                 write_debug(f"⚠️ Errore verifica reparti: {e}")
         
@@ -163,39 +196,6 @@ else:
     write_debug("❌ Inizializzazione database fallita")
     st.error("❌ Errore critico: impossibile inizializzare il database")
     st.stop()
-
-# ============================================================================
-# IMPORT DAL DB.PY CON GESTIONE ERRORI
-# ============================================================================
-try:
-    from db import (
-        get_db_connection, esegui_query, verify_password,
-        TavoloService, OrdineService, PagamentoService,
-        NotificaService, ReportService
-    )
-    write_debug("✅ Import da db.py riuscito!")
-    
-    # Verifica che le classi esistano
-    write_debug(f"✅ TavoloService: {TavoloService}")
-    write_debug(f"✅ OrdineService: {OrdineService}")
-    write_debug(f"✅ PagamentoService: {PagamentoService}")
-    
-except Exception as e:
-    write_debug("❌ ERRORE IMPORT da db.py", e)
-    # Mostra l'errore anche nell'interfaccia
-    st.error(f"Errore di importazione: {e}")
-    st.stop()
-
-# ============================================================================
-# MOSTRA DEBUG NELL'INTERFACCIA (OPZIONALE)
-# ============================================================================
-with st.sidebar.expander("🐛 DEBUG INFO", expanded=False):
-    try:
-        with open(DEBUG_LOG, 'r') as f:
-            debug_content = f.read()
-        st.text(debug_content[-1000:])  # Mostra ultimi 1000 caratteri
-    except:
-        st.info("Nessun debug disponibile")
 
 # ============================================================================
 # INIZIALIZZAZIONE DATABASE PER STREAMLIT CLOUD (AGGIUNTA QUI)
