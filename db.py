@@ -511,27 +511,19 @@ def create_indexes(cursor):
     logger.info("Indici creati con successo")
 
 # ============================================================================
-# DATI INIZIALI - VERSIONE CHE NON SOVRASCRIVE
+# DATI INIZIALI - VERSIONE CORRETTA
 # ============================================================================
 def populate_initial_data(cursor):
     """Popola il database con dati di esempio SOLO SE LE TABELLE SONO VUOTE"""
     
     logger.info("Verifica dati iniziali...")
     
-    # Brand (solo se non esiste)
-    cursor.execute("SELECT COUNT(*) FROM brand")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("""
-            INSERT INTO brand (id, nome, partita_iva) 
-            VALUES (1, 'PALAZZO FIORINI', '01234567890')
-        """)
-        logger.info("✅ Brand default creato")
-    else:
-        logger.info("✅ Brand già esistente")
-    
-    # Reparti (solo se non esistono)
+    # ========================================================================
+    # 1. REPARTI (PRIMA DI TUTTO!)
+    # ========================================================================
     cursor.execute("SELECT COUNT(*) FROM reparti")
     if cursor.fetchone()[0] == 0:
+        logger.info("📁 Creazione reparti...")
         reparti = [
             (1, 'CUCINA', '👨‍🍳', '#e74c3c', 1),
             (2, 'BAR', '🍸', '#3498db', 2),
@@ -539,15 +531,113 @@ def populate_initial_data(cursor):
             (4, 'PIZZERIA', '🍕', '#e67e22', 4),
         ]
         for id, nome, icona, colore, ordine in reparti:
-            cursor.execute("""
-                INSERT INTO reparti (id, nome, icona, colore, ordine)
-                VALUES (?, ?, ?, ?, ?)
-            """, (id, nome, icona, colore, ordine))
-        logger.info(f"✅ {len(reparti)} reparti creati")
+            try:
+                cursor.execute("""
+                    INSERT INTO reparti (id, nome, icona, colore, ordine, attivo)
+                    VALUES (?, ?, ?, ?, ?, 1)
+                """, (id, nome, icona, colore, ordine))
+                logger.info(f"   ✅ Reparto creato: {nome}")
+            except Exception as e:
+                logger.error(f"   ❌ Errore creazione reparto {nome}: {e}")
     else:
-        logger.info("✅ Reparti già esistenti")
+        # Mostra reparti esistenti
+        cursor.execute("SELECT id, nome FROM reparti")
+        reparti_esistenti = cursor.fetchall()
+        logger.info(f"✅ Reparti già esistenti: {len(reparti_esistenti)}")
+        for r in reparti_esistenti:
+            logger.info(f"   📋 Reparto: ID {r['id']} - {r['nome']}")
     
-    # Utenti (solo se non esistono)
+    # ========================================================================
+    # 2. CATEGORIE (DOPO REPARTI)
+    # ========================================================================
+    cursor.execute("SELECT COUNT(*) FROM categorie")
+    if cursor.fetchone()[0] == 0:
+        logger.info("📁 Creazione categorie...")
+        
+        # Verifica che i reparti esistano
+        cursor.execute("SELECT id FROM reparti WHERE id IN (1,2,3,4)")
+        reparti_esistenti = [r['id'] for r in cursor.fetchall()]
+        
+        if len(reparti_esistenti) < 4:
+            logger.error("❌ Non tutti i reparti necessari esistono!")
+            # Ricrea i reparti forzatamente
+            for id, nome, icona, colore, ordine in [
+                (1, 'CUCINA', '👨‍🍳', '#e74c3c', 1),
+                (2, 'BAR', '🍸', '#3498db', 2),
+                (3, 'PASTICCERIA', '🍰', '#9b59b6', 3),
+                (4, 'PIZZERIA', '🍕', '#e67e22', 4),
+            ]:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO reparti (id, nome, icona, colore, ordine, attivo)
+                    VALUES (?, ?, ?, ?, ?, 1)
+                """, (id, nome, icona, colore, ordine))
+            logger.info("✅ Reparti ricreati forzatamente")
+        
+        categorie = [
+            (1, 'ANTIPASTI', 1, '🥗', 1),
+            (2, 'PRIMI', 1, '🍝', 2),
+            (3, 'SECONDI', 1, '🥩', 3),
+            (4, 'CONTORNI', 1, '🥦', 4),
+            (5, 'DOLCI', 3, '🍰', 5),
+            (6, 'BEVANDE', 2, '🥤', 6),
+            (7, 'PIZZE', 4, '🍕', 7),
+        ]
+        for id, nome, reparto_id, icona, ordine in categorie:
+            try:
+                cursor.execute("""
+                    INSERT INTO categorie (id, nome, reparto_id, icona, ordine, attiva)
+                    VALUES (?, ?, ?, ?, ?, 1)
+                """, (id, nome, reparto_id, icona, ordine))
+                logger.info(f"   ✅ Categoria creata: {nome} (reparto_id: {reparto_id})")
+            except Exception as e:
+                logger.error(f"   ❌ Errore creazione categoria {nome}: {e}")
+    else:
+        cursor.execute("SELECT COUNT(*) FROM categorie")
+        count = cursor.fetchone()[0]
+        logger.info(f"✅ Categorie già esistenti: {count}")
+    
+    # ========================================================================
+    # 3. PIATTI (DOPO CATEGORIE)
+    # ========================================================================
+    cursor.execute("SELECT COUNT(*) FROM piatti")
+    if cursor.fetchone()[0] == 0:
+        logger.info("🍽️ Creazione piatti...")
+        piatti = [
+            (1, 'Bruschetta', 1, 6.50, 1),
+            (2, 'Spaghetti Carbonara', 2, 12.00, 1),
+            (3, 'Tagliata di Manzo', 3, 18.00, 1),
+            (4, 'Patate al Forno', 4, 5.00, 1),
+            (5, 'Tiramisù', 5, 7.00, 1),
+            (6, 'Acqua 1L', 6, 2.50, 1),
+            (7, 'Pizza Margherita', 7, 8.00, 1),
+        ]
+        for id, nome, cat_id, prezzo, disp in piatti:
+            try:
+                cursor.execute("""
+                    INSERT INTO piatti (id, nome, categoria_id, prezzo, disponibile)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (id, nome, cat_id, prezzo, disp))
+                logger.info(f"   ✅ Piatto creato: {nome}")
+            except Exception as e:
+                logger.error(f"   ❌ Errore creazione piatto {nome}: {e}")
+    else:
+        cursor.execute("SELECT COUNT(*) FROM piatti")
+        count = cursor.fetchone()[0]
+        logger.info(f"✅ Piatti già esistenti: {count}")
+    
+    # ========================================================================
+    # 4. RESTO DEI DATI (BRAND, UTENTI, ECC.)
+    # ========================================================================
+    # Brand
+    cursor.execute("SELECT COUNT(*) FROM brand")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("""
+            INSERT INTO brand (id, nome, partita_iva) 
+            VALUES (1, 'PALAZZO FIORINI', '01234567890')
+        """)
+        logger.info("✅ Brand default creato")
+    
+    # Utenti
     cursor.execute("SELECT COUNT(*) FROM utenti")
     if cursor.fetchone()[0] == 0:
         utenti = [
@@ -563,10 +653,8 @@ def populate_initial_data(cursor):
                 VALUES (?, ?, ?, ?, ?, ?, 1)
             """, (id, username, pwd_hash, nome, cognome, ruolo))
         logger.info(f"✅ {len(utenti)} utenti creati")
-    else:
-        logger.info("✅ Utenti già esistenti")
     
-    # Sale (solo se non esistono)
+    # Sale
     cursor.execute("SELECT COUNT(*) FROM sale")
     if cursor.fetchone()[0] == 0:
         sale = [
@@ -580,10 +668,8 @@ def populate_initial_data(cursor):
                 VALUES (?, ?, ?, ?)
             """, (id, nome, colore, ordine))
         logger.info(f"✅ {len(sale)} sale create")
-    else:
-        logger.info("✅ Sale già esistenti")
     
-    # Tavoli (solo se non esistono)
+    # Tavoli
     cursor.execute("SELECT COUNT(*) FROM tavoli")
     if cursor.fetchone()[0] == 0:
         tavoli_per_sala = {1: 8, 2: 6, 3: 4}
@@ -596,55 +682,8 @@ def populate_initial_data(cursor):
                 """, (i, sala_id, 4))
                 tavoli_inseriti += 1
         logger.info(f"✅ {tavoli_inseriti} tavoli creati")
-    else:
-        logger.info("✅ Tavoli già esistenti")
     
-    # Categorie (solo se non esistono)
-    cursor.execute("SELECT COUNT(*) FROM categorie")
-    if cursor.fetchone()[0] == 0:
-        categorie = [
-            (1, 'ANTIPASTI', 1, '🥗', 1),
-            (2, 'PRIMI', 1, '🍝', 2),
-            (3, 'SECONDI', 1, '🥩', 3),
-            (4, 'CONTORNI', 1, '🥦', 4),
-            (5, 'DOLCI', 3, '🍰', 5),
-            (6, 'BEVANDE', 2, '🥤', 6),
-            (7, 'PIZZE', 4, '🍕', 7),
-        ]
-        for id, nome, reparto_id, icona, ordine in categorie:
-            cursor.execute("""
-                INSERT INTO categorie (id, nome, reparto_id, icona, ordine)
-                VALUES (?, ?, ?, ?, ?)
-            """, (id, nome, reparto_id, icona, ordine))
-        logger.info(f"✅ {len(categorie)} categorie create")
-    else:
-        logger.info("✅ Categorie già esistenti")
-    
-    # Piatti (solo se non esistono)
-    cursor.execute("SELECT COUNT(*) FROM piatti")
-    if cursor.fetchone()[0] == 0:
-        piatti = [
-            (1, 'Bruschetta', 1, 6.50, 1),
-            (2, 'Spaghetti Carbonara', 2, 12.00, 1),
-            (3, 'Tagliata di Manzo', 3, 18.00, 1),
-            (4, 'Patate al Forno', 4, 5.00, 1),
-            (5, 'Tiramisù', 5, 7.00, 1),
-            (6, 'Acqua 1L', 6, 2.50, 1),
-            (7, 'Pizza Margherita', 7, 8.00, 1),
-        ]
-        for id, nome, cat_id, prezzo, disp in piatti:
-            cursor.execute("""
-                INSERT INTO piatti (id, nome, categoria_id, prezzo, disponibile)
-                VALUES (?, ?, ?, ?, ?)
-            """, (id, nome, cat_id, prezzo, disp))
-        logger.info(f"✅ {len(piatti)} piatti di default creati")
-    else:
-        # Leggi quanti piatti ci sono
-        cursor.execute("SELECT COUNT(*) FROM piatti")
-        count = cursor.fetchone()[0]
-        logger.info(f"✅ Piatti già esistenti: {count}")
-    
-    # Variazioni (solo se non esistono)
+    # Variazioni
     cursor.execute("SELECT COUNT(*) FROM variazioni")
     if cursor.fetchone()[0] == 0:
         variazioni = [
@@ -661,10 +700,8 @@ def populate_initial_data(cursor):
                 VALUES (?, ?, ?, ?, ?)
             """, (id, nome, prezzo, reparto_id, ordine))
         logger.info(f"✅ {len(variazioni)} variazioni create")
-    else:
-        logger.info("✅ Variazioni già esistenti")
     
-    # Configurazioni iniziali
+    # Config
     cursor.execute("SELECT COUNT(*) FROM config")
     if cursor.fetchone()[0] == 0:
         cursor.execute("""
@@ -675,8 +712,6 @@ def populate_initial_data(cursor):
             ('iva_percentuale', '10', 'number', 'Percentuale IVA')
         """)
         logger.info("✅ Configurazioni iniziali create")
-    else:
-        logger.info("✅ Configurazioni già esistenti")
     
     logger.info("✅ Verifica dati iniziali completata")
 
