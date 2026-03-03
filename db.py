@@ -1436,4 +1436,4 @@ Utilizzo:
         else:
             print("Comando non riconosciuto. Usa --help per aiuto.")
     else:
-        init_db()"# Forza rebuild completo" 
+        init_db()
