@@ -511,19 +511,25 @@ def create_indexes(cursor):
     logger.info("Indici creati con successo")
 
 # ============================================================================
-# DATI INIZIALI - VERSIONE CORRETTA
+# DATI INIZIALI - VERSIONE SUPER ROBUSTA
 # ============================================================================
 def populate_initial_data(cursor):
-    """Popola il database con dati di esempio SOLO SE LE TABELLE SONO VUOTE"""
+    """Popola il database con dati di esempio - ORDINE FORZATO"""
     
-    logger.info("Verifica dati iniziali...")
+    logger.info("=" * 60)
+    logger.info("VERIFICA DATI INIZIALI")
+    logger.info("=" * 60)
     
     # ========================================================================
-    # 1. REPARTI (PRIMA DI TUTTO!)
+    # 1. REPARTI (ASSOLUTAMENTE PRIMA DI TUTTO)
     # ========================================================================
+    logger.info("📁 STEP 1: Verifica REPARTI")
     cursor.execute("SELECT COUNT(*) FROM reparti")
-    if cursor.fetchone()[0] == 0:
-        logger.info("📁 Creazione reparti...")
+    count = cursor.fetchone()[0]
+    logger.info(f"   Reparti trovati: {count}")
+    
+    if count == 0:
+        logger.info("   Creazione reparti di default...")
         reparti = [
             (1, 'CUCINA', '👨‍🍳', '#e74c3c', 1),
             (2, 'BAR', '🍸', '#3498db', 2),
@@ -536,31 +542,35 @@ def populate_initial_data(cursor):
                     INSERT INTO reparti (id, nome, icona, colore, ordine, attivo)
                     VALUES (?, ?, ?, ?, ?, 1)
                 """, (id, nome, icona, colore, ordine))
-                logger.info(f"   ✅ Reparto creato: {nome}")
+                logger.info(f"      ✅ {nome}")
             except Exception as e:
-                logger.error(f"   ❌ Errore creazione reparto {nome}: {e}")
+                logger.error(f"      ❌ Errore: {e}")
     else:
+        logger.info("   ✅ Reparti già esistenti")
         # Mostra reparti esistenti
-        cursor.execute("SELECT id, nome FROM reparti")
-        reparti_esistenti = cursor.fetchall()
-        logger.info(f"✅ Reparti già esistenti: {len(reparti_esistenti)}")
-        for r in reparti_esistenti:
-            logger.info(f"   📋 Reparto: ID {r['id']} - {r['nome']}")
+        cursor.execute("SELECT id, nome FROM reparti ORDER BY id")
+        for r in cursor.fetchall():
+            logger.info(f"      📋 ID {r['id']}: {r['nome']}")
     
     # ========================================================================
     # 2. CATEGORIE (DOPO REPARTI)
     # ========================================================================
+    logger.info("📁 STEP 2: Verifica CATEGORIE")
     cursor.execute("SELECT COUNT(*) FROM categorie")
-    if cursor.fetchone()[0] == 0:
-        logger.info("📁 Creazione categorie...")
+    count = cursor.fetchone()[0]
+    logger.info(f"   Categorie trovate: {count}")
+    
+    if count == 0:
+        logger.info("   Creazione categorie di default...")
         
         # Verifica che i reparti esistano
         cursor.execute("SELECT id FROM reparti WHERE id IN (1,2,3,4)")
         reparti_esistenti = [r['id'] for r in cursor.fetchall()]
+        logger.info(f"   Reparti disponibili: {reparti_esistenti}")
         
         if len(reparti_esistenti) < 4:
-            logger.error("❌ Non tutti i reparti necessari esistono!")
-            # Ricrea i reparti forzatamente
+            logger.error("   ❌ Reparti mancanti! Ricreazione forzata...")
+            # Ricrea reparti
             for id, nome, icona, colore, ordine in [
                 (1, 'CUCINA', '👨‍🍳', '#e74c3c', 1),
                 (2, 'BAR', '🍸', '#3498db', 2),
@@ -571,7 +581,7 @@ def populate_initial_data(cursor):
                     INSERT OR REPLACE INTO reparti (id, nome, icona, colore, ordine, attivo)
                     VALUES (?, ?, ?, ?, ?, 1)
                 """, (id, nome, icona, colore, ordine))
-            logger.info("✅ Reparti ricreati forzatamente")
+            logger.info("   ✅ Reparti ricreati")
         
         categorie = [
             (1, 'ANTIPASTI', 1, '🥗', 1),
@@ -588,20 +598,25 @@ def populate_initial_data(cursor):
                     INSERT INTO categorie (id, nome, reparto_id, icona, ordine, attiva)
                     VALUES (?, ?, ?, ?, ?, 1)
                 """, (id, nome, reparto_id, icona, ordine))
-                logger.info(f"   ✅ Categoria creata: {nome} (reparto_id: {reparto_id})")
+                logger.info(f"      ✅ {nome} (reparto_id: {reparto_id})")
             except Exception as e:
-                logger.error(f"   ❌ Errore creazione categoria {nome}: {e}")
+                logger.error(f"      ❌ Errore {nome}: {e}")
     else:
-        cursor.execute("SELECT COUNT(*) FROM categorie")
-        count = cursor.fetchone()[0]
-        logger.info(f"✅ Categorie già esistenti: {count}")
+        logger.info("   ✅ Categorie già esistenti")
+        cursor.execute("SELECT id, nome, reparto_id FROM categorie ORDER BY id")
+        for c in cursor.fetchall():
+            logger.info(f"      📋 ID {c['id']}: {c['nome']} (reparto: {c['reparto_id']})")
     
     # ========================================================================
     # 3. PIATTI (DOPO CATEGORIE)
     # ========================================================================
+    logger.info("🍽️ STEP 3: Verifica PIATTI")
     cursor.execute("SELECT COUNT(*) FROM piatti")
-    if cursor.fetchone()[0] == 0:
-        logger.info("🍽️ Creazione piatti...")
+    count = cursor.fetchone()[0]
+    logger.info(f"   Piatti trovati: {count}")
+    
+    if count == 0:
+        logger.info("   Creazione piatti di default...")
         piatti = [
             (1, 'Bruschetta', 1, 6.50, 1),
             (2, 'Spaghetti Carbonara', 2, 12.00, 1),
@@ -617,25 +632,25 @@ def populate_initial_data(cursor):
                     INSERT INTO piatti (id, nome, categoria_id, prezzo, disponibile)
                     VALUES (?, ?, ?, ?, ?)
                 """, (id, nome, cat_id, prezzo, disp))
-                logger.info(f"   ✅ Piatto creato: {nome}")
+                logger.info(f"      ✅ {nome}")
             except Exception as e:
-                logger.error(f"   ❌ Errore creazione piatto {nome}: {e}")
+                logger.error(f"      ❌ Errore {nome}: {e}")
     else:
-        cursor.execute("SELECT COUNT(*) FROM piatti")
-        count = cursor.fetchone()[0]
-        logger.info(f"✅ Piatti già esistenti: {count}")
+        logger.info(f"   ✅ Piatti già esistenti: {count}")
     
     # ========================================================================
-    # 4. RESTO DEI DATI (BRAND, UTENTI, ECC.)
+    # 4. ALTRI DATI (BRAND, UTENTI, ecc.)
     # ========================================================================
+    logger.info("🏢 STEP 4: Verifica altri dati")
+    
     # Brand
     cursor.execute("SELECT COUNT(*) FROM brand")
     if cursor.fetchone()[0] == 0:
         cursor.execute("""
             INSERT INTO brand (id, nome, partita_iva) 
-            VALUES (1, 'PALAZZO FIORINI', '01234567890')
+            VALUES (1, 'RISTORAPP', '01234567890')
         """)
-        logger.info("✅ Brand default creato")
+        logger.info("   ✅ Brand default creato")
     
     # Utenti
     cursor.execute("SELECT COUNT(*) FROM utenti")
@@ -652,36 +667,7 @@ def populate_initial_data(cursor):
                 INSERT INTO utenti (id, username, password_hash, nome, cognome, ruolo, brand_id)
                 VALUES (?, ?, ?, ?, ?, ?, 1)
             """, (id, username, pwd_hash, nome, cognome, ruolo))
-        logger.info(f"✅ {len(utenti)} utenti creati")
-    
-    # Sale
-    cursor.execute("SELECT COUNT(*) FROM sale")
-    if cursor.fetchone()[0] == 0:
-        sale = [
-            (1, 'SALA PRINCIPALE', '#2ecc71', 1),
-            (2, 'TERRAZZA', '#f1c40f', 2),
-            (3, 'SALA PRIVATA', '#9b59b6', 3),
-        ]
-        for id, nome, colore, ordine in sale:
-            cursor.execute("""
-                INSERT INTO sale (id, nome, colore, ordine)
-                VALUES (?, ?, ?, ?)
-            """, (id, nome, colore, ordine))
-        logger.info(f"✅ {len(sale)} sale create")
-    
-    # Tavoli
-    cursor.execute("SELECT COUNT(*) FROM tavoli")
-    if cursor.fetchone()[0] == 0:
-        tavoli_per_sala = {1: 8, 2: 6, 3: 4}
-        tavoli_inseriti = 0
-        for sala_id, num_tavoli in tavoli_per_sala.items():
-            for i in range(1, num_tavoli + 1):
-                cursor.execute("""
-                    INSERT INTO tavoli (numero, sala_id, capienza, stato)
-                    VALUES (?, ?, ?, 'LIBERO')
-                """, (i, sala_id, 4))
-                tavoli_inseriti += 1
-        logger.info(f"✅ {tavoli_inseriti} tavoli creati")
+        logger.info(f"   ✅ {len(utenti)} utenti creati")
     
     # Variazioni
     cursor.execute("SELECT COUNT(*) FROM variazioni")
@@ -699,21 +685,11 @@ def populate_initial_data(cursor):
                 INSERT INTO variazioni (id, nome, prezzo, reparto_id, ordine)
                 VALUES (?, ?, ?, ?, ?)
             """, (id, nome, prezzo, reparto_id, ordine))
-        logger.info(f"✅ {len(variazioni)} variazioni create")
+        logger.info(f"   ✅ {len(variazioni)} variazioni create")
     
-    # Config
-    cursor.execute("SELECT COUNT(*) FROM config")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("""
-            INSERT INTO config (chiave, valore, tipo, descrizione)
-            VALUES 
-            ('public_url', 'http://localhost:8501', 'text', 'URL pubblico per QR code'),
-            ('ristorante_nome', 'PALAZZO FIORINI', 'text', 'Nome del ristorante'),
-            ('iva_percentuale', '10', 'number', 'Percentuale IVA')
-        """)
-        logger.info("✅ Configurazioni iniziali create")
-    
-    logger.info("✅ Verifica dati iniziali completata")
+    logger.info("=" * 60)
+    logger.info("✅ VERIFICA DATI INIZIALI COMPLETATA")
+    logger.info("=" * 60)
 
 # ============================================================================
 # SERVICE LAYER
