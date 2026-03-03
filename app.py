@@ -2100,6 +2100,9 @@ def show_gestione_menu():
 def show_gestione_categorie():
     st.markdown("### 📁 Gestione Categorie")
     
+    # Recupera reparti per il selectbox
+    reparti = esegui_query("SELECT * FROM reparti ORDER BY nome", fetchall=True)
+    
     col1, col2 = st.columns([1, 2])
     
     with col1:
@@ -2108,36 +2111,51 @@ def show_gestione_categorie():
             
             nome = st.text_input("Nome categoria *", placeholder="es. ANTIPASTI")
             
-            reparti = esegui_query("SELECT * FROM reparti ORDER BY nome", fetchall=True)
-            reparto_id = st.selectbox(
-                "Reparto *",
-                options=[r['id'] for r in reparti],
-                format_func=lambda x: next(r['nome'] for r in reparti if r['id'] == x)
-            )
+            # Verifica che ci siano reparti
+            if not reparti:
+                st.error("❌ Nessun reparto trovato! Crea prima i reparti.")
+                st.info("I reparti dovrebbero essere creati automaticamente all'avvio.")
+            else:
+                # Selectbox per reparto - con valore di default
+                reparto_options = {r['id']: f"{r['icona']} {r['nome']}" for r in reparti}
+                reparto_id = st.selectbox(
+                    "Reparto *",
+                    options=list(reparto_options.keys()),
+                    format_func=lambda x: reparto_options[x],
+                    index=0  # Seleziona il primo reparto
+                )
             
             icona = st.text_input("Icona", value="🍽️", placeholder="es. 🥗")
             ordine = st.number_input("Ordine", min_value=1, value=10)
             attiva = st.checkbox("Categoria attiva", value=True)
             
             if st.form_submit_button("💾 SALVA CATEGORIA", use_container_width=True):
-                if nome:
+                if not nome:
+                    st.error("Il nome è obbligatorio")
+                elif not reparti:
+                    st.error("Impossibile creare categoria: nessun reparto disponibile")
+                else:
                     try:
-                        esegui_query("""
-                            INSERT INTO categorie (nome, reparto_id, icona, ordine, attiva)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (nome.upper(), reparto_id, icona, ordine, 1 if attiva else 0), commit=True)
-                        st.success(f"✅ Categoria '{nome}' creata!")
-                        st.rerun()
+                        # Assicurati che reparto_id sia valido
+                        if reparto_id is None:
+                            st.error("Seleziona un reparto valido")
+                        else:
+                            esegui_query("""
+                                INSERT INTO categorie (nome, reparto_id, icona, ordine, attiva)
+                                VALUES (?, ?, ?, ?, ?)
+                            """, (nome.upper(), reparto_id, icona, ordine, 1 if attiva else 0), commit=True)
+                            st.success(f"✅ Categoria '{nome}' creata!")
+                            st.cache_data.clear()
+                            st.rerun()
                     except Exception as e:
                         st.error(f"Errore: {e}")
-                else:
-                    st.error("Il nome è obbligatorio")
+                        write_debug(f"Errore creazione categoria: {e}", e)
     
     with col2:
         st.markdown("**📋 Categorie Esistenti**")
         
         categorie = esegui_query("""
-            SELECT c.*, r.nome as reparto_nome 
+            SELECT c.*, r.nome as reparto_nome, r.icona as reparto_icona
             FROM categorie c
             JOIN reparti r ON c.reparto_id = r.id
             ORDER BY c.ordine, c.nome
@@ -2151,7 +2169,7 @@ def show_gestione_categorie():
                     cols = st.columns([3, 1, 1, 1])
                     with cols[0]:
                         st.markdown(f"{cat['icona']} **{cat['nome']}**")
-                        st.caption(f"📦 {cat['reparto_nome']} | Ordine: {cat['ordine']}")
+                        st.caption(f"📦 {cat['reparto_icona']} {cat['reparto_nome']} | Ordine: {cat['ordine']}")
                     with cols[1]:
                         stato = "✅ Attiva" if cat['attiva'] else "❌ Inattiva"
                         st.markdown(stato)
@@ -2163,6 +2181,7 @@ def show_gestione_categorie():
                         if st.button("🗑️", key=f"del_cat_{cat['id']}"):
                             if st.checkbox(f"Confermi?", key=f"conf_cat_{cat['id']}"):
                                 esegui_query("DELETE FROM categorie WHERE id = ?", (cat['id'],), commit=True)
+                                st.cache_data.clear()
                                 st.rerun()
 
 # ============================================================================
