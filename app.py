@@ -2077,10 +2077,11 @@ def show_cassa():
     with tab_stats:
         show_stats_cassa()
 
+
 # ============================================================================
-# FUNZIONE PER GENERARE PRECONTO (NUOVA)
+# FUNZIONE PER GENERARE PRECONTO/SCONTRINO
 # ============================================================================
-def genera_preconto(comanda_id, brand_info=None):
+def genera_preconto(comanda_id, brand_info=None, tipo="PRECONTO"):
     """Genera HTML per preconto/scontrino"""
     
     if not brand_info:
@@ -2104,8 +2105,18 @@ def genera_preconto(comanda_id, brand_info=None):
         ORDER BY id
     """, (comanda_id,), fetchall=True)
     
+    # Recupera pagamento se esiste (per scontrino)
+    pagamento = None
+    if tipo == "SCONTRINO":
+        pagamento = esegui_query("""
+            SELECT * FROM pagamenti
+            WHERE comanda_id = ?
+            ORDER BY timestamp_pagamento DESC
+            LIMIT 1
+        """, (comanda_id,), fetchone=True)
+    
     # Calcola totali
-    totale = sum(p['qty'] * p['prezzo_unitario'] for p in piatti)
+    subtotale = sum(p['qty'] * p['prezzo_unitario'] for p in piatti)
     
     # Intestazione
     html = f"""
@@ -2116,16 +2127,35 @@ def genera_preconto(comanda_id, brand_info=None):
             <p style="margin:5px 0;">Tel: {brand_info.get('telefono', '')}</p>
             <p style="margin:5px 0;">P.IVA: {brand_info.get('partita_iva', '')}</p>
             <hr>
-            <h3 style="margin:10px 0;">PRECONTO</h3>
+            <h3 style="margin:10px 0;">{tipo}</h3>
+    """
+    
+    # Aggiungi scritta "NON FISCALE" per scontrino
+    if tipo == "SCONTRINO":
+        html += """
+            <p style="color: #e74c3c; font-weight: bold; font-size: 1.1em;">📌 NON FISCALE</p>
+        """
+    
+    html += """
         </div>
     """
     
-    # Info tavolo
+    # Info tavolo e data/ora
+    ora_attuale = datetime.now().strftime('%d/%m/%Y %H:%M')
     html += f"""
         <div style="margin-bottom: 15px;">
             <p><strong>Tavolo:</strong> {comanda['tavolo_numero']} - {comanda['sala_nome']}</p>
             <p><strong>Cameriere:</strong> {comanda.get('cameriere_nome', '')} {comanda.get('cameriere_cognome', '')}</p>
-            <p><strong>Data:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+            <p><strong>Data e Ora:</strong> {ora_attuale}</p>
+    """
+    
+    if pagamento:
+        html += f"""
+            <p><strong>Pagamento:</strong> {pagamento.get('metodo', 'N/A')}</p>
+            <p><strong>Operatore:</strong> {st.session_state.get('username', 'N/A')}</p>
+        """
+    
+    html += """
         </div>
         
         <hr>
@@ -2163,17 +2193,164 @@ def genera_preconto(comanda_id, brand_info=None):
         <hr>
         
         <div style="text-align:right; font-size:1.2em;">
-            <p><strong>TOTALE: € {totale:.2f}</strong></p>
+            <p><strong>Subtotale: € {subtotale:.2f}</strong></p>
+    """
+    
+    # Dettaglio pagamento per scontrino
+    if pagamento:
+        html += f"""
+            <hr>
+            <p><strong>Contanti: € {pagamento.get('contanti', 0):.2f}</strong></p>
+            <p><strong>Carta: € {pagamento.get('carta', 0):.2f}</strong></p>
+            <p><strong>Bancomat: € {pagamento.get('bancomat', 0):.2f}</strong></p>
+            <p><strong>Altro: € {pagamento.get('altri', 0):.2f}</strong></p>
+            <hr>
+            <p><strong>TOTALE PAGATO: € {subtotale:.2f}</strong></p>
+            <p><strong>Resto: € {pagamento.get('resto', 0):.2f}</strong></p>
+        """
+    else:
+        html += f"""
+            <p><strong>TOTALE: € {subtotale:.2f}</strong></p>
+        """
+    
+    html += """
         </div>
         
         <div style="text-align:center; margin-top:30px;">
-            <p>Grazie per aver scelto {brand_info['nome'] if brand_info else 'il nostro ristorante'}!</p>
+            <p>Grazie per averci scelto!</p>
             <p>Alla prossima!</p>
         </div>
     </div>
     """
     
-    return html, totale
+    return html, subtotale
+
+
+# ============================================================================
+# FUNZIONE PER STAMPARE SCONTRINO (TESTO PER STAMPANTE TERMICA)
+# ============================================================================
+def stampa_scontrino(comanda_id, tipo="SCONTRINO"):
+    """Genera testo per stampante termica"""
+    try:
+        # Recupera dati comanda
+        comanda = esegui_query("""
+            SELECT c.*, t.numero as tavolo_numero, s.nome as sala_nome,
+                   u.nome as cameriere_nome, u.cognome as cameriere_cognome
+            FROM comande c
+            JOIN tavoli t ON c.tavolo_id = t.id
+            JOIN sale s ON t.sala_id = s.id
+            LEFT JOIN utenti u ON c.cameriere_id = u.id
+            WHERE c.id = ?
+        """, (comanda_id,), fetchone=True)
+        
+        if not comanda:
+            return False, "Comanda non trovata"
+        
+        # Recupera piatti
+        piatti = esegui_query("""
+            SELECT * FROM comandine
+            WHERE comanda_id = ?
+            ORDER BY id
+        """, (comanda_id,), fetchall=True)
+        
+        if not piatti:
+            return False, "Nessun piatto in questa comanda"
+        
+        # Recupera pagamento
+        pagamento = esegui_query("""
+            SELECT * FROM pagamenti
+            WHERE comanda_id = ?
+            ORDER BY timestamp_pagamento DESC
+            LIMIT 1
+        """, (comanda_id,), fetchone=True)
+        
+        # Recupera brand
+        brand = esegui_query("SELECT * FROM brand WHERE id = 1", fetchone=True) or {}
+        
+        # Calcola totale
+        totale = sum(p['qty'] * p['prezzo_unitario'] for p in piatti)
+        
+        # Data e ora attuale
+        ora_attuale = datetime.now().strftime('%d/%m/%Y %H:%M')
+        
+        # Crea contenuto per stampa
+        lines = []
+        lines.append("=" * 42)
+        lines.append(f"  {brand.get('nome', 'RISTORAPP')}")
+        if brand.get('indirizzo'):
+            lines.append(f"  {brand['indirizzo']}")
+        if brand.get('telefono'):
+            lines.append(f"  Tel: {brand['telefono']}")
+        if brand.get('partita_iva'):
+            lines.append(f"  P.IVA: {brand['partita_iva']}")
+        lines.append("=" * 42)
+        lines.append(f"  {tipo}")
+        
+        # Aggiungi scritta NON FISCALE per scontrino
+        if tipo == "SCONTRINO":
+            lines.append("  📌 NON FISCALE")
+        
+        lines.append("=" * 42)
+        lines.append(f"  TAVOLO: {comanda['tavolo_numero']} - {comanda['sala_nome']}")
+        lines.append(f"  DATA e ORA: {ora_attuale}")
+        if comanda.get('cameriere_nome'):
+            lines.append(f"  CAMERIERE: {comanda['cameriere_nome']} {comanda.get('cameriere_cognome', '')}")
+        lines.append("-" * 42)
+        lines.append(" QTA DESCRIZIONE")
+        lines.append("-" * 42)
+        
+        for p in piatti:
+            nome = p['piatto_nome'][:28] if len(p['piatto_nome']) > 28 else p['piatto_nome']
+            lines.append(f" {p['qty']:2}  {nome}")
+            lines.append(f"     € {p['prezzo_unitario']:6.2f}  € {p['qty'] * p['prezzo_unitario']:6.2f}")
+            if p.get('note'):
+                lines.append(f"     -> {p['note'][:30]}")
+        
+        lines.append("-" * 42)
+        lines.append(f" TOTALE: € {totale:8.2f}")
+        
+        if pagamento and tipo == "SCONTRINO":
+            lines.append("-" * 42)
+            lines.append(" SUDDIVISIONE PAGAMENTO:")
+            if pagamento.get('contanti', 0) > 0:
+                lines.append(f"   Contanti: € {pagamento['contanti']:8.2f}")
+            if pagamento.get('carta', 0) > 0:
+                lines.append(f"   Carta: € {pagamento['carta']:8.2f}")
+            if pagamento.get('bancomat', 0) > 0:
+                lines.append(f"   Bancomat: € {pagamento['bancomat']:8.2f}")
+            if pagamento.get('altri', 0) > 0:
+                lines.append(f"   Altro: € {pagamento['altri']:8.2f}")
+            if pagamento.get('resto', 0) > 0:
+                lines.append(f"   Resto: € {pagamento['resto']:8.2f}")
+        
+        lines.append("=" * 42)
+        lines.append("  Grazie e arrivederci!")
+        lines.append("=" * 42)
+        lines.append("")
+        lines.append("\n" * 3)
+        
+        content = "\n".join(lines)
+        
+        # Prova a inviare alla stampante
+        try:
+            from db import StampanteService
+            job = {
+                'printer': {'nome': 'Stampante Termica'},
+                'content': content,
+                'tipo': tipo,
+                'comanda_id': comanda_id,
+                'reparto_id': None
+            }
+            if hasattr(StampanteService, '_print_queue'):
+                StampanteService._print_queue.put(job)
+                return True, f"✅ {tipo} inviato alla stampante"
+            else:
+                return True, content
+        except:
+            return True, content
+            
+    except Exception as e:
+        return False, f"Errore: {e}"
 
 
 def show_conti_da_pagare():
@@ -2185,7 +2362,7 @@ def show_conti_da_pagare():
     
     for conto in conti:
         with st.container(border=True):
-            col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+            col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
             
             with col1:
                 st.markdown(f"### 🪑 Tavolo {conto['tavolo_numero']}")
@@ -2205,13 +2382,25 @@ def show_conti_da_pagare():
             with col3:
                 if st.button("📄 PRECONTO", key=f"preconto_{conto['comanda_id']}"):
                     brand = esegui_query("SELECT * FROM brand WHERE id = 1", fetchone=True)
-                    preconto_html, totale = genera_preconto(conto['comanda_id'], brand)
+                    preconto_html, totale = genera_preconto(conto['comanda_id'], brand, "PRECONTO")
                     st.session_state.preconto_html = preconto_html
                     st.session_state.preconto_show = True
                     st.session_state.preconto_comanda_id = conto['comanda_id']
                     st.rerun()
             
             with col4:
+                if st.button("🖨️ STAMPA", key=f"stampa_{conto['comanda_id']}"):
+                    success, result = stampa_scontrino(conto['comanda_id'], "PRECONTO")
+                    if success:
+                        if not result.startswith("✅"):
+                            with st.expander("🖨️ Anteprima Stampa", expanded=True):
+                                st.code(result, language="text")
+                        else:
+                            st.success(result)
+                    else:
+                        st.error(result)
+            
+            with col5:
                 if st.button("💰 PAGA", key=f"paga_{conto['comanda_id']}"):
                     st.session_state.pagamento_in_corso = conto
                     st.rerun()
@@ -2221,12 +2410,30 @@ def show_conti_da_pagare():
         with st.expander("🧾 PRECONTO", expanded=True):
             st.markdown(st.session_state.preconto_html, unsafe_allow_html=True)
             
-            col_stampa, col_chiudi = st.columns(2)
+            col_stampa, col_stampa_testo, col_chiudi = st.columns(3)
             with col_stampa:
-                if st.button("🖨️ STAMPA / SALVA PDF"):
-                    st.info("Funzione stampa in sviluppo - puoi fare screenshot o stampare dal browser")
+                if st.button("🖨️ STAMPA TERMICA", key="stampa_preconto"):
+                    if st.session_state.get('preconto_comanda_id'):
+                        success, result = stampa_scontrino(st.session_state.preconto_comanda_id, "PRECONTO")
+                        if success:
+                            if not result.startswith("✅"):
+                                with st.expander("📄 Anteprima Stampa", expanded=False):
+                                    st.code(result, language="text")
+                            else:
+                                st.success(result)
+                        else:
+                            st.error(result)
+            
+            with col_stampa_testo:
+                if st.button("📄 COPIA TESTO", key="copia_preconto"):
+                    if st.session_state.get('preconto_comanda_id'):
+                        success, result = stampa_scontrino(st.session_state.preconto_comanda_id, "PRECONTO")
+                        if success and not result.startswith("✅"):
+                            st.code(result, language="text")
+                            st.info("Copia il testo sopra per incollarlo dove vuoi")
+            
             with col_chiudi:
-                if st.button("✖️ CHIUDI PRECONTO"):
+                if st.button("✖️ CHIUDI PRECONTO", key="chiudi_preconto"):
                     st.session_state.preconto_show = False
                     st.rerun()
 
@@ -2287,7 +2494,7 @@ def show_pagamenti():
     
     st.markdown("---")
     
-    col_annulla, col_conferma = st.columns(2)
+    col_annulla, col_conferma, col_stampa = st.columns(3)
     
     with col_annulla:
         if st.button("❌ ANNULLA", use_container_width=True):
@@ -2328,8 +2535,57 @@ def show_pagamenti():
                         write_debug(f"Errore archiviazione storico: {e}")
                     
                     st.success("✅ Pagamento registrato!")
+                    
+                    # Genera scontrino con scritta NON FISCALE
+                    brand = esegui_query("SELECT * FROM brand WHERE id = 1", fetchone=True)
+                    scontrino_html, totale = genera_preconto(conto['comanda_id'], brand, "SCONTRINO")
+                    st.session_state.scontrino_html = scontrino_html
+                    st.session_state.scontrino_show = True
+                    
+                    # Stampa automatica
+                    try:
+                        stampa_scontrino(conto['comanda_id'], "SCONTRINO")
+                    except:
+                        pass
+                    
                     st.session_state.pagamento_in_corso = None
-                    time.sleep(2)
+                    time.sleep(1)
+                    st.rerun()
+    
+    with col_stampa:
+        if st.button("🖨️ STAMPA PRECONTO", use_container_width=True):
+            success, result = stampa_scontrino(conto['comanda_id'], "PRECONTO")
+            if success:
+                if not result.startswith("✅"):
+                    with st.expander("📄 Anteprima Stampa", expanded=True):
+                        st.code(result, language="text")
+                else:
+                    st.success(result)
+            else:
+                st.error(result)
+    
+    # Mostra scontrino dopo pagamento
+    if st.session_state.get('scontrino_show', False):
+        with st.expander("🧾 SCONTRINO", expanded=True):
+            st.markdown(st.session_state.scontrino_html, unsafe_allow_html=True)
+            
+            col_stampa, col_chiudi = st.columns(2)
+            with col_stampa:
+                if st.button("🖨️ STAMPA SCONTRINO", key="stampa_scontrino"):
+                    if st.session_state.get('preconto_comanda_id'):
+                        success, result = stampa_scontrino(st.session_state.preconto_comanda_id, "SCONTRINO")
+                        if success:
+                            if not result.startswith("✅"):
+                                with st.expander("📄 Anteprima Stampa", expanded=False):
+                                    st.code(result, language="text")
+                            else:
+                                st.success(result)
+                        else:
+                            st.error(result)
+            
+            with col_chiudi:
+                if st.button("✖️ CHIUDI SCONTRINO", key="chiudi_scontrino"):
+                    st.session_state.scontrino_show = False
                     st.rerun()
 
 
