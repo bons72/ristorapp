@@ -60,6 +60,31 @@ write_debug(f"Files in directory: {os.listdir('.')}")
 write_debug(f"STREAMLIT_CLOUD env: {os.environ.get('STREAMLIT_CLOUD', 'NOT SET')}")
 
 # ============================================================================
+# IMPORT DAL DB.PY (AGGIUNTO QUI)
+# ============================================================================
+try:
+    from db import (
+        get_db_connection, esegui_query, verify_password, hash_password,
+        TavoloService, OrdineService, PagamentoService,
+        NotificaService, ReportService,
+        get_database_path, create_tables, create_indexes, 
+        populate_initial_data
+    )
+    write_debug("✅ Import da db.py riuscito!")
+    
+    # Verifica che le classi esistano
+    write_debug(f"✅ TavoloService: {TavoloService}")
+    write_debug(f"✅ OrdineService: {OrdineService}")
+    write_debug(f"✅ PagamentoService: {PagamentoService}")
+    write_debug(f"✅ NotificaService: {NotificaService}")
+    write_debug(f"✅ ReportService: {ReportService}")
+    
+except Exception as e:
+    write_debug("❌ ERRORE IMPORT da db.py", e)
+    st.error(f"Errore di importazione: {e}")
+    st.stop()
+
+# ============================================================================
 # INIZIALIZZAZIONE DATABASE (PER STREAMLIT CLOUD)
 # ============================================================================
 import tempfile
