@@ -333,10 +333,21 @@ def get_variazioni_per_piatto(piatto_id):
         return []
 
 # ============================================================================
-# PAGINA DI LOGIN
+# PAGINA DI LOGIN CON CREAZIONE PRIMO ACCOUNT
 # ============================================================================
 def show_login():
-    """Schermata di login"""
+    """Schermata di login - Crea il primo account se non esistono utenti"""
+    
+    # Verifica se esistono utenti nel database
+    try:
+        # Prova a contare gli utenti
+        users = esegui_query("SELECT COUNT(*) as count FROM utenti", fetchone=True)
+        users_count = users['count'] if users else 0
+    except Exception as e:
+        # Se la tabella non esiste o altro errore, assumiamo 0 utenti
+        write_debug(f"Errore verifica utenti: {e}")
+        users_count = 0
+    
     st.markdown("""
         <div style='text-align: center; padding: 2rem;'>
             <h1>🏢 PALAZZO FIORINI</h1>
@@ -344,37 +355,101 @@ def show_login():
         </div>
     """, unsafe_allow_html=True)
     
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        with st.form("login_form", clear_on_submit=True):
-            st.markdown("### 🔐 Accedi")
-            username = st.text_input("Username", placeholder="Inserisci username")
-            password = st.text_input("Password", type="password", placeholder="Inserisci password")
-            
-            if st.form_submit_button("ACCEDI", use_container_width=True):
-                try:
-                    user = esegui_query(
-                        "SELECT * FROM utenti WHERE username = ? AND attivo = 1",
-                        (username,), fetchone=True
-                    )
-                    
-                    if user and verify_password(user['password_hash'], password):
-                        st.session_state.logged_in = True
-                        st.session_state.user_id = user['id']
-                        st.session_state.username = user['username']
-                        st.session_state.user_role = user['ruolo']
-                        write_debug(f"✅ Login riuscito: {username}")
-                        st.rerun()
-                    else:
-                        write_debug(f"❌ Login fallito: {username}")
-                        st.error("❌ Credenziali non valide")
-                except Exception as e:
-                    write_debug(f"❌ Errore durante login: {e}", e)
-                    st.error(f"Errore: {e}")
+    # Se non ci sono utenti, mostra form di registrazione primo account
+    if users_count == 0:
+        st.info("📋 **Benvenuto!** Non ci sono ancora utenti nel sistema. Crea il primo account amministratore.")
         
-        st.markdown("---")
-        st.caption("Utenti di test: admin/admin123, cameriere/123, cucina/123, bar/123, cassa/123")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            with st.form("primo_account_form", clear_on_submit=True):
+                st.markdown("### 👑 Crea Amministratore")
+                
+                col_nome1, col_nome2 = st.columns(2)
+                with col_nome1:
+                    nome = st.text_input("Nome *", placeholder="Mario", value="Admin")
+                with col_nome2:
+                    cognome = st.text_input("Cognome *", placeholder="Rossi", value="Super")
+                
+                username = st.text_input("Username *", placeholder="admin", value="admin", help="Scegli un username per l'accesso")
+                password = st.text_input("Password *", type="password", placeholder="Crea una password", value="admin123", help="Scegli una password sicura")
+                conferma = st.text_input("Conferma Password *", type="password", placeholder="Conferma password", value="admin123")
+                
+                st.markdown("---")
+                
+                if st.form_submit_button("🚀 CREA ACCOUNT", type="primary", use_container_width=True):
+                    if not nome or not cognome or not username or not password:
+                        st.error("❌ Tutti i campi sono obbligatori")
+                    elif password != conferma:
+                        st.error("❌ Le password non coincidono")
+                    elif len(password) < 3:
+                        st.error("❌ La password deve essere almeno di 3 caratteri")
+                    else:
+                        try:
+                            # Assicurati che la tabella utenti esista
+                            esegui_query("""
+                                CREATE TABLE IF NOT EXISTS utenti (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    username TEXT UNIQUE NOT NULL,
+                                    password_hash TEXT NOT NULL,
+                                    nome TEXT NOT NULL,
+                                    cognome TEXT NOT NULL,
+                                    ruolo TEXT NOT NULL,
+                                    brand_id INTEGER DEFAULT 1,
+                                    attivo INTEGER DEFAULT 1,
+                                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                                )
+                            """, commit=True)
+                            
+                            # Hash della password
+                            from db import hash_password
+                            password_hash = hash_password(password)
+                            
+                            # Crea l'utente amministratore
+                            esegui_query("""
+                                INSERT INTO utenti (username, password_hash, nome, cognome, ruolo, attivo)
+                                VALUES (?, ?, ?, ?, 'SUPERADMIN', 1)
+                            """, (username, password_hash, nome, cognome), commit=True)
+                            
+                            st.success("✅ **Account creato con successo!** Ora puoi fare login.")
+                            st.balloons()
+                            time.sleep(2)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Errore durante la creazione: {e}")
+                            write_debug(f"Errore creazione primo account: {e}", e)
+    
+    # Login normale (se ci sono già utenti)
+    else:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            with st.form("login_form", clear_on_submit=True):
+                st.markdown("### 🔐 Accedi")
+                username = st.text_input("Username", placeholder="Inserisci username")
+                password = st.text_input("Password", type="password", placeholder="Inserisci password")
+                
+                if st.form_submit_button("ACCEDI", type="primary", use_container_width=True):
+                    try:
+                        user = esegui_query(
+                            "SELECT * FROM utenti WHERE username = ? AND attivo = 1",
+                            (username,), fetchone=True
+                        )
+                        
+                        if user and verify_password(user['password_hash'], password):
+                            st.session_state.logged_in = True
+                            st.session_state.user_id = user['id']
+                            st.session_state.username = user['username']
+                            st.session_state.user_role = user['ruolo']
+                            write_debug(f"✅ Login riuscito: {username}")
+                            st.rerun()
+                        else:
+                            write_debug(f"❌ Login fallito: {username}")
+                            st.error("❌ Credenziali non valide")
+                    except Exception as e:
+                        write_debug(f"❌ Errore durante login: {e}", e)
+                        st.error(f"Errore: {e}")
+            
+            st.markdown("---")
+            st.caption("💡 Se hai dimenticato le credenziali, contatta l'amministratore")
 
 # ============================================================================
 # SIDEBAR
