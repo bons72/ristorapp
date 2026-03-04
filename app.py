@@ -4109,11 +4109,496 @@ def mostra_pulizia_backup(prefix="pulizia"):
         st.dataframe(data, use_container_width=True, key=f"{prefix}_df")
     else:
         st.info("Nessun backup disponibile")
-    
 
+# ============================================================================
+# GESTIONE STAMPANTI CON RICERCA AUTOMATICA
+# ============================================================================
 def show_gestione_stampanti():
     st.subheader("🖨️ Configurazione Stampanti")
-    st.info("Funzione in sviluppo")
+    
+    # Tabs per le diverse funzionalità
+    tab_lista, tab_ricerca, tab_test = st.tabs(["📋 STAMPANTI CONFIGURATE", "🔍 RICERCA AUTOMATICA", "🧪 TEST STAMPA"])
+    
+    with tab_lista:
+        mostra_lista_stampanti()
+    
+    with tab_ricerca:
+        mostra_ricerca_stampanti()
+    
+    with tab_test:
+        mostra_test_stampa()
+
+
+def mostra_lista_stampanti():
+    """Mostra la lista delle stampanti configurate"""
+    
+    # Pulsante per nuova stampante manuale
+    with st.expander("➕ NUOVA STAMPANTE MANUALE", expanded=False):
+        with st.form("nuova_stampante_form"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                nome = st.text_input("Nome stampante *", placeholder="es. Cucina Termica")
+                
+                # Reparti
+                reparti = esegui_query("SELECT * FROM reparti ORDER BY nome", fetchall=True)
+                reparto_id = st.selectbox(
+                    "Reparto *",
+                    options=[r['id'] for r in reparti],
+                    format_func=lambda x: next(f"{r['icona']} {r['nome']}" for r in reparti if r['id'] == x)
+                )
+                
+                tipo = st.selectbox(
+                    "Tipo interfaccia",
+                    ["TERMICA", "FISCALE", "ETICHETTE"]
+                )
+            
+            with col2:
+                interfaccia = st.selectbox(
+                    "Interfaccia",
+                    ["network", "usb", "serial"]
+                )
+                
+                if interfaccia == "network":
+                    indirizzo_ip = st.text_input("Indirizzo IP", placeholder="192.168.1.100")
+                    porta = st.number_input("Porta", value=9100, min_value=1, max_value=65535)
+                    device_path = None
+                elif interfaccia == "usb":
+                    indirizzo_ip = None
+                    porta = None
+                    device_path = st.text_input("Device path", placeholder="/dev/usb/lp0")
+                else:  # serial
+                    indirizzo_ip = None
+                    porta = None
+                    device_path = st.text_input("Porta COM", placeholder="COM3")
+                
+                caratteri = st.number_input("Caratteri per riga", value=42, min_value=20, max_value=80)
+                stampa_auto = st.checkbox("Stampa automatica", value=True)
+            
+            if st.form_submit_button("💾 SALVA STAMPANTE", type="primary", use_container_width=True):
+                if not nome or not reparto_id:
+                    st.error("Nome e reparto sono obbligatori")
+                else:
+                    try:
+                        from db import StampanteService
+                        success = StampanteService.aggiungi_stampante(
+                            nome=nome,
+                            reparto_id=reparto_id,
+                            tipo=tipo,
+                            indirizzo_ip=indirizzo_ip,
+                            porta=porta,
+                            device_path=device_path
+                        )
+                        if success:
+                            st.success(f"✅ Stampante '{nome}' aggiunta!")
+                            st.rerun()
+                        else:
+                            st.error("Errore durante il salvataggio")
+                    except Exception as e:
+                        st.error(f"Errore: {e}")
+    
+    st.divider()
+    
+    # Lista stampanti configurate
+    st.markdown("### 📋 Stampanti Configurate")
+    
+    try:
+        from db import StampanteService, get_printer_status
+        
+        stampanti = StampanteService.get_tutte_stampanti()
+        
+        if not stampanti:
+            st.info("Nessuna stampante configurata. Usa la ricerca automatica o aggiungine una manualmente.")
+            return
+        
+        for s in stampanti:
+            with st.container(border=True):
+                # Ottieni stato
+                status = get_printer_status(s['id']) if 'id' in s else None
+                
+                col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                
+                with col1:
+                    reparto_icona = s.get('reparto_icona', '🖨️')
+                    st.markdown(f"**{reparto_icona} {s['nome']}**")
+                    st.caption(f"Reparto: {s.get('reparto_nome', 'N/A')}")
+                
+                with col2:
+                    if s['interfaccia'] == 'network':
+                        st.markdown(f"🌐 {s['indirizzo_ip']}:{s['porta']}")
+                    elif s['interfaccia'] == 'usb':
+                        st.markdown(f"🔌 {s['device_path']}")
+                    else:
+                        st.markdown(f"📠 {s['device_path']}")
+                
+                with col3:
+                    if status:
+                        if status['connected']:
+                            st.success("✅ Online")
+                        else:
+                            st.error(f"❌ Offline\n{status['message']}")
+                    else:
+                        if s['attivo']:
+                            st.warning("⏳ Stato sconosciuto")
+                        else:
+                            st.warning("⏸️ Disattiva")
+                
+                with col4:
+                    # Menu azioni
+                    with st.popover("⚙️"):
+                        if st.button("🔄 Test", key=f"test_{s['id']}", use_container_width=True):
+                            if status:
+                                if status['connected']:
+                                    st.success(f"✅ Connessione OK: {status['message']}")
+                                else:
+                                    st.error(f"❌ {status['message']}")
+                        
+                        if st.button("📝 Modifica", key=f"edit_{s['id']}", use_container_width=True):
+                            st.session_state.edit_stampante_id = s['id']
+                            st.rerun()
+                        
+                        if st.button("🗑️ Elimina", key=f"del_{s['id']}", use_container_width=True):
+                            if st.checkbox(f"Confermi eliminazione {s['nome']}?", key=f"conf_{s['id']}"):
+                                from db import StampanteService
+                                if StampanteService.elimina_stampante(s['id']):
+                                    st.success("✅ Stampante eliminata")
+                                    st.rerun()
+        
+        # Modifica stampante
+        if 'edit_stampante_id' in st.session_state:
+            mostra_modifica_stampante(st.session_state.edit_stampante_id)
+            
+    except Exception as e:
+        st.error(f"Errore nel caricamento stampanti: {e}")
+
+
+def mostra_modifica_stampante(printer_id):
+    """Modifica una stampante esistente"""
+    try:
+        from db import StampanteService, esegui_query
+        
+        stampante = esegui_query("SELECT * FROM stampanti WHERE id = ?", (printer_id,), fetchone=True)
+        
+        if not stampante:
+            st.error("Stampante non trovata")
+            del st.session_state.edit_stampante_id
+            st.rerun()
+            return
+        
+        st.markdown(f"### ✏️ Modifica: {stampante['nome']}")
+        
+        with st.form("modifica_stampante_form"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                nome = st.text_input("Nome stampante", value=stampante['nome'])
+                
+                reparti = esegui_query("SELECT * FROM reparti ORDER BY nome", fetchall=True)
+                reparto_id = st.selectbox(
+                    "Reparto",
+                    options=[r['id'] for r in reparti],
+                    format_func=lambda x: next(f"{r['icona']} {r['nome']}" for r in reparti if r['id'] == x),
+                    index=next((i for i, r in enumerate(reparti) if r['id'] == stampante['reparto_id']), 0)
+                )
+                
+                tipo = st.selectbox(
+                    "Tipo",
+                    ["TERMICA", "FISCALE", "ETICHETTE"],
+                    index=["TERMICA", "FISCALE", "ETICHETTE"].index(stampante['tipo'])
+                )
+            
+            with col2:
+                interfaccia = st.selectbox(
+                    "Interfaccia",
+                    ["network", "usb", "serial"],
+                    index=["network", "usb", "serial"].index(stampante['interfaccia'])
+                )
+                
+                if interfaccia == "network":
+                    indirizzo_ip = st.text_input("Indirizzo IP", value=stampante.get('indirizzo_ip', ''))
+                    porta = st.number_input("Porta", value=stampante.get('porta', 9100))
+                    device_path = None
+                else:
+                    indirizzo_ip = None
+                    porta = None
+                    device_path = st.text_input("Device path", value=stampante.get('device_path', ''))
+                
+                caratteri = st.number_input("Caratteri per riga", value=stampante.get('caratteri_per_riga', 42))
+                attivo = st.checkbox("Stampante attiva", value=bool(stampante['attivo']))
+            
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                if st.form_submit_button("💾 SALVA MODIFICHE", type="primary", use_container_width=True):
+                    try:
+                        success = StampanteService.aggiorna_stampante(
+                            printer_id,
+                            nome=nome,
+                            reparto_id=reparto_id,
+                            tipo=tipo,
+                            indirizzo_ip=indirizzo_ip,
+                            porta=porta,
+                            device_path=device_path,
+                            caratteri_per_riga=caratteri,
+                            attivo=1 if attivo else 0
+                        )
+                        if success:
+                            st.success("✅ Stampante aggiornata!")
+                            del st.session_state.edit_stampante_id
+                            st.rerun()
+                        else:
+                            st.error("Errore durante l'aggiornamento")
+                    except Exception as e:
+                        st.error(f"Errore: {e}")
+            
+            with col_cancel:
+                if st.form_submit_button("❌ ANNULLA", use_container_width=True):
+                    del st.session_state.edit_stampante_id
+                    st.rerun()
+                    
+    except Exception as e:
+        st.error(f"Errore: {e}")
+
+
+def mostra_ricerca_stampanti():
+    """Ricerca automatica stampanti USB e di rete"""
+    
+    st.markdown("### 🔍 Ricerca Automatica Stampanti")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 💻 Ricerca USB")
+        if st.button("🔍 SCANSIONA PORTA USB", type="primary", use_container_width=True):
+            with st.spinner("Scansione porte USB in corso..."):
+                from db import scan_usb_printers
+                usb_printers = scan_usb_printers()
+                
+                if usb_printers:
+                    st.success(f"✅ Trovate {len(usb_printers)} stampanti USB")
+                    st.session_state.usb_printers = usb_printers
+                else:
+                    st.info("Nessuna stampante USB trovata")
+    
+    with col2:
+        st.markdown("#### 🌐 Ricerca Rete")
+        
+        subnet = st.text_input("Subnet (es. 192.168.1.)", placeholder="192.168.1.", help="Lascia vuoto per auto-rilevamento")
+        
+        if st.button("🔍 SCANSIONA RETE", type="primary", use_container_width=True):
+            with st.spinner("Scansione rete in corso... (ci vorranno circa 30 secondi)"):
+                from db import scan_network_printers
+                network_printers = scan_network_printers(subnet if subnet else None)
+                
+                if network_printers:
+                    st.success(f"✅ Trovate {len(network_printers)} stampanti di rete")
+                    st.session_state.network_printers = network_printers
+                else:
+                    st.info("Nessuna stampante di rete trovata")
+    
+    st.divider()
+    
+    # Mostra risultati USB
+    if 'usb_printers' in st.session_state and st.session_state.usb_printers:
+        st.markdown("### 💻 Stampanti USB Trovate")
+        
+        for idx, printer in enumerate(st.session_state.usb_printers):
+            with st.container(border=True):
+                col1, col2, col3 = st.columns([3, 2, 1])
+                
+                with col1:
+                    st.markdown(f"**{printer['nome']}**")
+                    st.caption(printer.get('descrizione', ''))
+                
+                with col2:
+                    st.markdown(f"📌 {printer.get('device_path', 'N/A')}")
+                    if printer.get('vendor_id'):
+                        st.caption(f"VID: {printer['vendor_id']:04x}, PID: {printer['product_id']:04x}")
+                
+                with col3:
+                    if st.button("➕ AGGIUNGI", key=f"add_usb_{idx}"):
+                        st.session_state.add_printer = printer
+                        st.rerun()
+    
+    # Mostra risultati rete
+    if 'network_printers' in st.session_state and st.session_state.network_printers:
+        st.markdown("### 🌐 Stampanti di Rete Trovate")
+        
+        for idx, printer in enumerate(st.session_state.network_printers):
+            with st.container(border=True):
+                col1, col2, col3 = st.columns([3, 2, 1])
+                
+                with col1:
+                    st.markdown(f"**{printer['nome']}**")
+                
+                with col2:
+                    st.markdown(f"📌 {printer['indirizzo_ip']}:{printer['porta']}")
+                
+                with col3:
+                    if st.button("➕ AGGIUNGI", key=f"add_net_{idx}"):
+                        st.session_state.add_printer = printer
+                        st.rerun()
+    
+    # Form aggiunta stampante trovata
+    if 'add_printer' in st.session_state:
+        st.divider()
+        st.markdown("### ➕ Aggiungi Stampante Trovata")
+        
+        printer = st.session_state.add_printer
+        
+        with st.form("aggiungi_stampante_trovata"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                nome = st.text_input("Nome stampante", value=printer['nome'])
+                
+                reparti = esegui_query("SELECT * FROM reparti ORDER BY nome", fetchall=True)
+                reparto_id = st.selectbox(
+                    "Reparto *",
+                    options=[r['id'] for r in reparti],
+                    format_func=lambda x: next(f"{r['icona']} {r['nome']}" for r in reparti if r['id'] == x)
+                )
+            
+            with col2:
+                caratteri = st.number_input("Caratteri per riga", value=42)
+                stampa_auto = st.checkbox("Stampa automatica", value=True)
+            
+            # Mostra dettagli tecnici
+            st.markdown("#### 📋 Dettagli Tecnici")
+            for key, value in printer.items():
+                if key not in ['nome', 'descrizione'] and value:
+                    st.text(f"{key}: {value}")
+            
+            if st.form_submit_button("✅ CONFERMA AGGIUNTA", type="primary", use_container_width=True):
+                try:
+                    from db import StampanteService
+                    
+                    # Prepara parametri in base al tipo
+                    params = {
+                        'nome': nome,
+                        'reparto_id': reparto_id,
+                        'tipo': 'TERMICA'
+                    }
+                    
+                    if printer.get('interfaccia') == 'network':
+                        params['indirizzo_ip'] = printer['indirizzo_ip']
+                        params['porta'] = printer.get('porta', 9100)
+                    elif printer.get('interfaccia') == 'usb':
+                        params['device_path'] = printer['device_path']
+                        params['vendor_id'] = printer.get('vendor_id')
+                        params['product_id'] = printer.get('product_id')
+                    elif printer.get('interfaccia') == 'serial':
+                        params['device_path'] = printer['porta']
+                    
+                    success = StampanteService.aggiungi_stampante(**params)
+                    
+                    if success:
+                        st.success(f"✅ Stampante '{nome}' aggiunta!")
+                        del st.session_state.add_printer
+                        st.rerun()
+                    else:
+                        st.error("Errore durante il salvataggio")
+                except Exception as e:
+                    st.error(f"Errore: {e}")
+        
+        if st.button("❌ ANNULLA", key="cancel_add_printer"):
+            del st.session_state.add_printer
+            st.rerun()
+
+
+def mostra_test_stampa():
+    """Pagina per testare le stampanti"""
+    
+    st.markdown("### 🧪 Test Stampa")
+    
+    try:
+        from db import StampanteService, test_printer_connection
+        
+        stampanti = StampanteService.get_tutte_stampanti()
+        
+        if not stampanti:
+            st.info("Nessuna stampante configurata. Vai su 'RICERCA AUTOMATICA' per trovare le stampanti.")
+            return
+        
+        # Selezione stampante
+        printer_options = {s['id']: f"{s.get('reparto_icona', '🖨️')} {s['nome']}" for s in stampanti}
+        printer_id = st.selectbox(
+            "Seleziona stampante da testare",
+            options=list(printer_options.keys()),
+            format_func=lambda x: printer_options[x]
+        )
+        
+        if printer_id:
+            printer = next((s for s in stampanti if s['id'] == printer_id), None)
+            
+            if printer:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("#### 📋 Dettagli Stampante")
+                    st.json({
+                        'Nome': printer['nome'],
+                        'Reparto': printer.get('reparto_nome', 'N/A'),
+                        'Interfaccia': printer['interfaccia'],
+                        'IP/Porta': f"{printer.get('indirizzo_ip', 'N/A')}:{printer.get('porta', 'N/A')}" if printer['interfaccia'] == 'network' else 'N/A',
+                        'Device': printer.get('device_path', 'N/A')
+                    })
+                
+                with col2:
+                    st.markdown("#### 🔌 Test Connessione")
+                    if st.button("🔄 TEST CONNESSIONE", use_container_width=True):
+                        with st.spinner("Test in corso..."):
+                            connected, message = test_printer_connection(printer)
+                            if connected:
+                                st.success(f"✅ {message}")
+                            else:
+                                st.error(f"❌ {message}")
+                
+                st.divider()
+                
+                # Test di stampa
+                st.markdown("#### 🖨️ Test di Stampa")
+                
+                testo_test = st.text_area(
+                    "Testo di prova",
+                    value="=" * 42 + "\n" +
+                          "  RISTORAPP - TEST STAMPA\n" +
+                          "=" * 42 + "\n" +
+                          "  Questa è una stampa di prova\n" +
+                          "  per verificare il corretto\n" +
+                          "  funzionamento della stampante.\n" +
+                          "-" * 42 + "\n" +
+                          "  Data: " + datetime.now().strftime('%d/%m/%Y %H:%M') + "\n" +
+                          "=" * 42 + "\n",
+                    height=200
+                )
+                
+                col_stampa, col_anteprima = st.columns(2)
+                
+                with col_stampa:
+                    if st.button("🖨️ INVIA STAMPA DI TEST", type="primary", use_container_width=True):
+                        try:
+                            # Crea un job di test
+                            from db import _print_queue
+                            
+                            job = {
+                                'printer': printer,
+                                'content': testo_test,
+                                'tipo': 'TEST',
+                                'comanda_id': None,
+                                'reparto_id': printer['reparto_id']
+                            }
+                            _print_queue.put(job)
+                            st.success("✅ Stampa di test accodata!")
+                        except Exception as e:
+                            st.error(f"❌ Errore: {e}")
+                
+                with col_anteprima:
+                    if st.button("📄 ANTEPRIMA STAMPA", use_container_width=True):
+                        with st.expander("📄 Anteprima", expanded=True):
+                            st.code(testo_test, language="text")
+    
+    except Exception as e:
+        st.error(f"Errore: {e}")
 
 
 def show_qr_code_generator():
