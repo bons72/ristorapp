@@ -1269,12 +1269,17 @@ class ReportService:
             return []
 
 # ============================================================================
-# SERVIZIO STAMPANTI
+# SERVIZIO STAMPANTI - CON RICERCA AUTOMATICA
 # ============================================================================
 import socket
 import threading
 import queue
 import time
+import subprocess
+import sys
+import re
+import glob
+import os
 
 # Variabili globali per il thread di stampa
 _print_queue = queue.Queue()
@@ -1318,10 +1323,40 @@ def _execute_print(job):
         comanda_id = job.get('comanda_id')
         reparto_id = job.get('reparto_id')
         
-        # Stampa simulata
-        print(f"\n🖨️ SIMULAZIONE STAMPA - {tipo}")
-        print(content)
-        print("-" * 40)
+        # Se è una stampante reale, invia il comando
+        if printer_config and printer_config.get('interfaccia') == 'network':
+            try:
+                ip = printer_config['indirizzo_ip']
+                port = printer_config.get('porta', 9100)
+                
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                sock.connect((ip, port))
+                sock.send(content.encode('utf-8', errors='ignore'))
+                sock.close()
+                esito = 'INVIATO'
+                print(f"✅ Stampato {tipo} su {ip}:{port}")
+            except Exception as e:
+                esito = f'ERRORE: {e}'
+                print(f"❌ Errore stampa su rete: {e}")
+        
+        elif printer_config and printer_config.get('interfaccia') == 'usb':
+            try:
+                device = printer_config['device_path']
+                with open(device, 'wb') as f:
+                    f.write(content.encode('utf-8', errors='ignore'))
+                esito = 'INVIATO'
+                print(f"✅ Stampato {tipo} su {device}")
+            except Exception as e:
+                esito = f'ERRORE: {e}'
+                print(f"❌ Errore stampa su USB: {e}")
+        
+        else:
+            # Stampa simulata
+            print(f"\n🖨️ SIMULAZIONE STAMPA - {tipo}")
+            print(content)
+            print("-" * 40)
+            esito = 'SIMULATO'
         
         # Log successo
         try:
@@ -1330,16 +1365,219 @@ def _execute_print(job):
             cursor.execute("""
                 INSERT INTO log_stampe (tipo, reparto_id, comanda_id, contenuto, esito)
                 VALUES (?, ?, ?, ?, ?)
-            """, (tipo, reparto_id, comanda_id, content[:100], 'SIMULATO'))
+            """, (tipo, reparto_id, comanda_id, content[:200], esito))
             conn.commit()
             conn.close()
         except:
             pass
         
-        print(f"✅ Stampato {tipo} per comanda {comanda_id} (SIMULATO)")
-        
     except Exception as e:
         print(f"❌ Errore stampa: {e}")
+
+
+def scan_usb_printers():
+    """
+    Scansiona le porte USB per trovare stampanti termiche collegate
+    Restituisce una lista di stampanti trovate
+    """
+    printers = []
+    
+    try:
+        if sys.platform == 'linux':
+            # Su Linux, controlla /dev/usb/lp*
+            usb_devices = glob.glob('/dev/usb/lp*') + glob.glob('/dev/lp*')
+            
+            for dev in usb_devices:
+                # Prova a leggere le info del dispositivo
+                try:
+                    # Usa lsusb per trovare il vendor/product ID
+                    result = subprocess.run(['lsusb'], capture_output=True, text=True)
+                    lines = result.stdout.split('\n')
+                    
+                    # Cerca corrispondenze con device comuni per stampanti termiche
+                    for line in lines:
+                        if 'Printer' in line or 'Thermal' in line or 'POS' in line:
+                            # Estrai ID (formato: Bus XXX Device YYY: ID 1234:5678 Nome)
+                            match = re.search(r'ID (\w+):(\w+)', line)
+                            if match:
+                                vendor_id = int(match.group(1), 16)
+                                product_id = int(match.group(2), 16)
+                                
+                                printers.append({
+                                    'nome': f"Stampante USB {dev}",
+                                    'tipo': 'TERMICA',
+                                    'interfaccia': 'usb',
+                                    'device_path': dev,
+                                    'vendor_id': vendor_id,
+                                    'product_id': product_id,
+                                    'descrizione': line.strip()
+                                })
+                except:
+                    pass
+        
+        elif sys.platform == 'win32':
+            # Su Windows, prova a importare serial.tools.list_ports
+            try:
+                import serial.tools.list_ports
+                ports = serial.tools.list_ports.comports()
+                
+                for port in ports:
+                    if 'USB' in port.description or 'COM' in port.description:
+                        printers.append({
+                            'nome': f"Stampante {port.description}",
+                            'tipo': 'TERMICA',
+                            'interfaccia': 'serial',
+                            'porta': port.device,
+                            'vendor_id': port.vid,
+                            'product_id': port.pid,
+                            'descrizione': port.description
+                        })
+            except ImportError:
+                print("⚠️ pyserial non installato. Installa: pip install pyserial")
+    
+    except Exception as e:
+        logger.error(f"Errore scansione USB: {e}")
+    
+    return printers
+
+
+def scan_network_printers(subnet=None, timeout=0.5):
+    """
+    Scansiona la rete locale per trovare stampanti di rete (porta 9100)
+    """
+    printers = []
+    
+    try:
+        # Se non specificato, usa la subnet locale
+        if not subnet:
+            # Ottieni l'IP locale
+            hostname = socket.gethostname()
+            local_ip = socket.gethostbyname(hostname)
+            
+            # Assumi /24 subnet
+            subnet = '.'.join(local_ip.split('.')[:-1]) + '.'
+        
+        # Porte comuni per stampanti
+        ports = [9100, 515, 631]  # 9100=raw, 515=lpd, 631=ipp
+        
+        print(f"🔍 Scansione rete {subnet}0/24 in corso...")
+        
+        # Scansiona IP da .1 a .254
+        found = 0
+        for i in range(1, 255):
+            ip = f"{subnet}{i}"
+            
+            for port in ports:
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(timeout)
+                    result = sock.connect_ex((ip, port))
+                    sock.close()
+                    
+                    if result == 0:
+                        # Porta aperta, probabile stampante
+                        try:
+                            # Tenta di ottenere il nome host
+                            host = socket.gethostbyaddr(ip)[0]
+                        except:
+                            host = ip
+                        
+                        printers.append({
+                            'nome': f"Stampante {host}",
+                            'tipo': 'TERMICA',
+                            'interfaccia': 'network',
+                            'indirizzo_ip': ip,
+                            'porta': port,
+                            'descrizione': f"Stampante di rete ({ip}:{port})"
+                        })
+                        found += 1
+                        print(f"  ✅ Trovata stampante: {ip}:{port}")
+                        break  # Esci dal loop porte se ne trovi una aperta
+                except:
+                    pass
+            
+            # Aggiornamento ogni 10 IP per non bloccare
+            if i % 10 == 0:
+                print(f"  Scansione in corso... {i}/254")
+    
+    except Exception as e:
+        logger.error(f"Errore scansione rete: {e}")
+    
+    print(f"✅ Scansione completata. Trovate {found} stampanti.")
+    return printers
+
+
+def test_printer_connection(printer_config):
+    """
+    Testa la connessione a una stampante
+    """
+    try:
+        if printer_config.get('interfaccia') == 'network':
+            ip = printer_config['indirizzo_ip']
+            port = printer_config.get('porta', 9100)
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(3)
+            result = sock.connect_ex((ip, port))
+            sock.close()
+            
+            return result == 0, "Connessione OK" if result == 0 else f"Timeout su {ip}:{port}"
+        
+        elif printer_config.get('interfaccia') == 'usb':
+            if sys.platform == 'linux':
+                device = printer_config.get('device_path')
+                if device and os.path.exists(device):
+                    # Prova a scrivere un byte di test
+                    try:
+                        with open(device, 'wb') as f:
+                            f.write(b'\x0a')
+                        return True, f"Dispositivo {device} accessibile"
+                    except:
+                        return True, f"Dispositivo {device} trovato (sola lettura?)"
+                else:
+                    return False, f"Dispositivo {device} non trovato"
+        
+        elif printer_config.get('interfaccia') == 'serial':
+            try:
+                import serial
+                port = printer_config.get('porta')
+                ser = serial.Serial(port, timeout=1)
+                ser.close()
+                return True, f"Porta {port} accessibile"
+            except ImportError:
+                return False, "Libreria pyserial non installata"
+            except Exception as e:
+                return False, f"Errore porta {port}: {e}"
+    
+    except Exception as e:
+        return False, str(e)
+    
+    return False, "Tipo interfaccia non supportato"
+
+
+def get_printer_status(printer_id):
+    """
+    Ottiene lo stato di una stampante dal database
+    """
+    try:
+        printer = esegui_query("SELECT * FROM stampanti WHERE id = ?", (printer_id,), fetchone=True)
+        if not printer:
+            return None
+        
+        # Test connessione
+        connected, message = test_printer_connection(printer)
+        
+        return {
+            'id': printer['id'],
+            'nome': printer['nome'],
+            'connected': connected,
+            'message': message,
+            'attivo': printer['attivo']
+        }
+    except Exception as e:
+        logger.error(f"Errore get_printer_status: {e}")
+        return None
+
 
 class StampanteService:
     """Gestione stampanti termiche per reparti"""
@@ -1363,7 +1601,76 @@ class StampanteService:
             return []
     
     @staticmethod
-    def stampa_comanda(comanda_id, reparto_id, piatti):
+    def get_tutte_stampanti():
+        """Recupera tutte le stampanti configurate"""
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = dict_factory
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT s.*, r.nome as reparto_nome, r.icona as reparto_icona
+                FROM stampanti s
+                LEFT JOIN reparti r ON s.reparto_id = r.id
+                ORDER BY s.reparto_id, s.nome
+            """)
+            result = cursor.fetchall()
+            conn.close()
+            return result
+        except:
+            return []
+    
+    @staticmethod
+    def aggiungi_stampante(nome, reparto_id, tipo, indirizzo_ip=None, porta=9100, 
+                           device_path=None, vendor_id=None, product_id=None):
+        """Aggiunge una nuova stampante al database"""
+        try:
+            esegui_query("""
+                INSERT INTO stampanti 
+                (nome, reparto_id, tipo, indirizzo_ip, porta, device_path, 
+                 usb_vendor_id, usb_product_id, attivo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            """, (nome, reparto_id, tipo, indirizzo_ip, porta, device_path,
+                  vendor_id, product_id), commit=True)
+            return True
+        except Exception as e:
+            logger.error(f"Errore aggiunta stampante: {e}")
+            return False
+    
+    @staticmethod
+    def aggiorna_stampante(printer_id, **kwargs):
+        """Aggiorna i dati di una stampante"""
+        try:
+            campi = []
+            valori = []
+            for key, value in kwargs.items():
+                if value is not None:
+                    campi.append(f"{key} = ?")
+                    valori.append(value)
+            
+            if not campi:
+                return False
+            
+            query = f"UPDATE stampanti SET {', '.join(campi)} WHERE id = ?"
+            valori.append(printer_id)
+            
+            esegui_query(query, tuple(valori), commit=True)
+            return True
+        except Exception as e:
+            logger.error(f"Errore aggiornamento stampante: {e}")
+            return False
+    
+    @staticmethod
+    def elimina_stampante(printer_id):
+        """Elimina una stampante"""
+        try:
+            esegui_query("DELETE FROM stampanti WHERE id = ?", (printer_id,), commit=True)
+            return True
+        except Exception as e:
+            logger.error(f"Errore eliminazione stampante: {e}")
+            return False
+    
+    @staticmethod
+    def stampa_comanda(comanda_id, reparto_id, piatti, stampante_specifica=None):
         """Prepara e accoda la stampa di una comanda"""
         global _print_queue
         try:
@@ -1379,33 +1686,59 @@ class StampanteService:
                 WHERE c.id = ?
             """, (comanda_id,))
             comanda = cursor.fetchone()
+            
+            # Se specificata una stampante, usa quella, altrimenti cerca per reparto
+            if stampante_specifica:
+                cursor.execute("SELECT * FROM stampanti WHERE id = ?", (stampante_specifica,))
+            else:
+                cursor.execute("""
+                    SELECT * FROM stampanti 
+                    WHERE reparto_id = ? AND attivo = 1
+                    ORDER BY id LIMIT 1
+                """, (reparto_id,))
+            
+            stampante = cursor.fetchone()
             conn.close()
             
             if not comanda:
                 return False
             
-            content = []
-            content.append("=" * 42)
-            content.append(f"  TAVOLO: {comanda['tavolo_numero']} - {comanda['sala_nome']}")
-            content.append(f"  DATA: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-            content.append("-" * 42)
-            content.append(" QTA DESCRIZIONE")
-            content.append("-" * 42)
+            # Crea contenuto della stampa
+            content_lines = []
+            content_lines.append("=" * 42)
+            content_lines.append(f"  TAVOLO: {comanda['tavolo_numero']} - {comanda['sala_nome']}")
+            content_lines.append(f"  DATA: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+            content_lines.append("-" * 42)
+            content_lines.append(" QTA DESCRIZIONE")
+            content_lines.append("-" * 42)
             
             for p in piatti:
                 nome = p['piatto_nome'][:28] if len(p['piatto_nome']) > 28 else p['piatto_nome']
-                content.append(f" {p['qty']:2}  {nome}")
+                content_lines.append(f" {p['qty']:2}  {nome}")
                 if p.get('note'):
-                    content.append(f"     -> {p['note'][:30]}")
+                    # Se le note sono in formato JSON, estrai solo il testo
+                    if p['note'].startswith('{'):
+                        try:
+                            note_data = json.loads(p['note'])
+                            if note_data.get('note'):
+                                content_lines.append(f"     -> {note_data['note'][:30]}")
+                        except:
+                            content_lines.append(f"     -> {p['note'][:30]}")
+                    else:
+                        content_lines.append(f"     -> {p['note'][:30]}")
             
-            content.append("-" * 42)
-            content.append("")
-            content.append("\n" * 3)
+            content_lines.append("-" * 42)
+            content_lines.append("")
+            content_lines.append("\n" * 3)
             
-            content_str = "\n".join(content)
+            content_str = "\n".join(content_lines)
+            
+            # Se non c'è stampante configurata, usa stampante virtuale
+            if not stampante:
+                stampante = {'nome': 'Stampante Virtuale (simulata)'}
             
             job = {
-                'printer': {'nome': 'Stampante Virtuale'},
+                'printer': stampante,
                 'content': content_str,
                 'tipo': 'COMANDA',
                 'comanda_id': comanda_id,
