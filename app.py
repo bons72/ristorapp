@@ -1732,6 +1732,57 @@ def show_preordini():
             import traceback
             traceback.print_exc()
     
+# ============================================================================
+# GESTIONE PRE-ORDINI CLIENTI
+# ============================================================================
+def show_preordini():
+    st.title("📋 Pre-ordini Clienti")
+    
+    # ============================================================================
+    # DEBUG - Verifica database (COMPATTO)
+    # ============================================================================
+    with st.expander("🔍 DEBUG DATABASE", expanded=False):
+        try:
+            # Mostra il percorso del database
+            st.write(f"📦 **Database path:** {DB_PATH}")
+            
+            # Verifica se la tabella esiste
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='preordini'")
+            if cursor.fetchone():
+                st.success("✅ Tabella 'preordini' esiste")
+                
+                # Conta i record per stato
+                cursor.execute("SELECT stato, COUNT(*) as cnt FROM preordini GROUP BY stato")
+                records = cursor.fetchall()
+                
+                if records:
+                    st.markdown("##### 📊 Pre-ordini per stato:")
+                    for r in records:
+                        st.write(f"  • {r[0]}: {r[1]}")
+                else:
+                    st.warning("⚠️ Nessun record in 'preordini'")
+                    
+                # Mostra ID dei record recenti
+                cursor.execute("""
+                    SELECT id, tavolo_id, stato, timestamp_creazione 
+                    FROM preordini 
+                    ORDER BY id DESC LIMIT 3
+                """)
+                recenti = cursor.fetchall()
+                if recenti:
+                    st.markdown("##### 🔄 Ultimi 3 pre-ordini:")
+                    for r in recenti:
+                        st.write(f"  • ID:{r[0]}, Tav:{r[1]}, {r[2]}, {r[3]}")
+            else:
+                st.error("❌ Tabella 'preordini' NON esiste!")
+            
+            conn.close()
+            
+        except Exception as e:
+            st.error(f"❌ Errore nel debug: {e}")
+    
     # ============================================================================
     # TABS principali
     # ============================================================================
@@ -1744,8 +1795,12 @@ def show_preordini():
     with tab_storico:
         show_preordini_storico()
 
+
 def show_preordini_stato(stato):
     """Mostra i pre-ordini con un determinato stato"""
+    
+    # DEBUG: mostra cosa stiamo cercando
+    st.caption(f"🔍 Ricerca pre-ordini con stato: **{stato}**")
     
     # Recupera i pre-ordini con quel stato
     preordini = esegui_query("""
@@ -1758,15 +1813,17 @@ def show_preordini_stato(stato):
     """, (stato,), fetchall=True)
     
     if not preordini:
-        st.info(f"Nessun pre-ordine {stato}")
+        st.info(f"📭 Nessun pre-ordine con stato '{stato}'")
         return
+    
+    st.success(f"✅ Trovati {len(preordini)} pre-ordini con stato '{stato}'")
     
     for pre in preordini:
         with st.container(border=True):
             col1, col2, col3 = st.columns([2, 1, 1])
             
             with col1:
-                st.markdown(f"**🪑 Tavolo {pre['tavolo_numero']} - {pre['sala_nome']}**")
+                st.markdown(f"**🪑 Tavolo {pre['tavolo_numero']} - {pre['sala_nome']}** (ID: {pre['id']})")
                 
                 # Gestione data
                 if pre['timestamp_creazione']:
@@ -1801,7 +1858,7 @@ def show_preordini_stato(stato):
                         conferma_preordine(pre['id'])
                         st.rerun()
             
-            # Mostra i piatti dell'ordine (DETTAGLIO IMPORTANTE!)
+            # Mostra i piatti dell'ordine
             st.markdown("---")
             st.markdown("##### 🍽️ Piatti ordinati:")
             
@@ -1820,10 +1877,13 @@ def show_preordini_stato(stato):
                     st.markdown(f"**€{d['qty'] * d['prezzo_unitario']:.2f}**")
                 
                 # Mostra note del piatto
-                if d.get('note'):
+                if d.get('note') and d['note'] not in ['[]', '{}', '']:
                     st.caption(f"  📝 {d['note']}")
 
+
 def show_preordini_storico():
+    """Mostra storico pre-ordini"""
+    
     preordini = esegui_query("""
         SELECT p.*, t.numero as tavolo_numero, s.nome as sala_nome, u.username as cameriere
         FROM preordini p
@@ -1838,6 +1898,8 @@ def show_preordini_storico():
     if not preordini:
         st.info("Nessun pre-ordine nello storico")
         return
+    
+    st.caption(f"📊 Mostrati {len(preordini)} pre-ordini degli ultimi 30 giorni")
     
     for pre in preordini:
         # Formatta la data in modo leggibile
@@ -1874,13 +1936,14 @@ def show_preordini_storico():
             with st.expander("📋 Dettaglio piatti", expanded=False):
                 for d in dettagli:
                     st.caption(f"  • {d['qty']}x {d['piatto_nome']} - {format_currency(d['prezzo_unitario'] * d['qty'])}")
-                    if d.get('variazioni') and d['variazioni'] != '[]':
+                    if d.get('variazioni') and d['variazioni'] not in ['[]', '{}', '']:
                         try:
                             var = json.loads(d['variazioni'])
                             for v in var:
                                 st.caption(f"    ✦ {v.get('nome', '')} (+{format_currency(v.get('prezzo', 0))})")
                         except:
                             pass
+
 
 def show_revisione_preordine():
     """Mostra dettaglio pre-ordine per revisione con possibilità di modifica"""
@@ -1893,6 +1956,8 @@ def show_revisione_preordine():
     preordine_id = st.session_state.preordine_id_da_revisionare
     tavolo_numero = st.session_state.get('tavolo_numero_da_revisionare', 'N/A')
     sala_nome = st.session_state.get('sala_nome_da_revisionare', '')
+    
+    st.caption(f"🔍 Revisione pre-ordine ID: {preordine_id}")
     
     # Recupera i dati del pre-ordine dal database
     pre = esegui_query("""
@@ -1949,7 +2014,7 @@ def show_revisione_preordine():
         for d in dettagli:
             # Parsing variazioni
             variazioni = []
-            if d.get('variazioni') and d['variazioni'] != '[]':
+            if d.get('variazioni') and d['variazioni'] not in ['[]', '{}', '']:
                 try:
                     variazioni = json.loads(d['variazioni'])
                 except:
@@ -2197,6 +2262,7 @@ def show_revisione_preordine():
                     if 'rev_cat_selezionata' in st.session_state:
                         del st.session_state.rev_cat_selezionata
                     st.rerun()
+
 
 def conferma_preordine(preordine_id):
     """Converte un pre-ordine in comanda vera e propria"""
@@ -4633,7 +4699,7 @@ def show_qr_code_generator():
         st.markdown("""
         **Inserisci l'URL pubblico della tua app su Streamlit Cloud**
         
-        Esempio: `https://bons72-ristorapp.streamlit.app`
+        Esempio: `https://ristorapp-bons72.streamlit.app`
         """)
         
         col1, col2 = st.columns([3, 1])
