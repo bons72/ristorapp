@@ -1672,73 +1672,6 @@ def show_preordini():
     st.title("📋 Pre-ordini Clienti")
     
     # ============================================================================
-    # DEBUG - Verifica database
-    # ============================================================================
-    with st.expander("🔍 DEBUG DATABASE", expanded=True):
-        try:
-            # Mostra il percorso del database
-            st.write(f"📦 **Database path:** {DB_PATH}")
-            
-            # Verifica se la tabella esiste
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='preordini'")
-            if cursor.fetchone():
-                st.success("✅ Tabella 'preordini' esiste")
-                
-                # Conta i record totali
-                cursor.execute("SELECT COUNT(*) FROM preordini")
-                count = cursor.fetchone()[0]
-                st.write(f"📊 **Record totali in preordini:** {count}")
-                
-                if count > 0:
-                    # Mostra i primi 5 record
-                    cursor.execute("""
-                        SELECT p.id, p.tavolo_id, p.stato, p.timestamp_creazione, 
-                               t.numero as tavolo_numero
-                        FROM preordini p
-                        LEFT JOIN tavoli t ON p.tavolo_id = t.id
-                        ORDER BY p.id DESC LIMIT 5
-                    """)
-                    records = cursor.fetchall()
-                    
-                    st.markdown("##### Ultimi 5 pre-ordini:")
-                    for r in records:
-                        st.write(f"  • ID: {r[0]}, Tavolo: {r[4] or r[1]}, Stato: {r[2]}, Data: {r[3]}")
-                        
-                        # Mostra anche i dettagli
-                        cursor.execute("SELECT COUNT(*) FROM preordini_dettaglio WHERE preordine_id = ?", (r[0],))
-                        dettagli_count = cursor.fetchone()[0]
-                        st.write(f"    → Dettagli: {dettagli_count} piatti")
-                else:
-                    st.warning("⚠️ Nessun record trovato in 'preordini'")
-                    
-                    # Verifica se ci sono dati in altre tabelle correlate
-                    cursor.execute("SELECT COUNT(*) FROM tavoli")
-                    tavoli_count = cursor.fetchone()[0]
-                    st.write(f"   Tavoli nel database: {tavoli_count}")
-            else:
-                st.error("❌ Tabella 'preordini' NON esiste!")
-                
-                # Lista tutte le tabelle
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                tabelle = cursor.fetchall()
-                st.write("Tabelle esistenti:", [t[0] for t in tabelle])
-            
-            conn.close()
-            
-        except Exception as e:
-            st.error(f"❌ Errore nel debug: {e}")
-            import traceback
-            traceback.print_exc()
-    
-# ============================================================================
-# GESTIONE PRE-ORDINI CLIENTI
-# ============================================================================
-def show_preordini():
-    st.title("📋 Pre-ordini Clienti")
-    
-    # ============================================================================
     # DEBUG - Verifica database (COMPATTO)
     # ============================================================================
     with st.expander("🔍 DEBUG DATABASE", expanded=False):
@@ -1802,14 +1735,12 @@ def show_preordini_stato(stato):
     # DEBUG: mostra cosa stiamo cercando
     st.caption(f"🔍 Ricerca pre-ordini con stato: **{stato}**")
     
-    # Recupera i pre-ordini con quel stato - USA LEFT JOIN per robustezza
+    # Recupera i pre-ordini con quel stato
     preordini = esegui_query("""
-        SELECT p.*, 
-               COALESCE(t.numero, '?') as tavolo_numero, 
-               COALESCE(s.nome, 'Sala sconosciuta') as sala_nome
+        SELECT p.*, t.numero as tavolo_numero, s.nome as sala_nome
         FROM preordini p
-        LEFT JOIN tavoli t ON p.tavolo_id = t.id
-        LEFT JOIN sale s ON t.sala_id = s.id
+        JOIN tavoli t ON p.tavolo_id = t.id
+        JOIN sale s ON t.sala_id = s.id
         WHERE p.stato = ?
         ORDER BY p.timestamp_creazione DESC
     """, (stato,), fetchall=True)
@@ -1844,9 +1775,9 @@ def show_preordini_stato(stato):
                 # Recupera i dettagli per il totale
                 dettagli = esegui_query("SELECT * FROM preordini_dettaglio WHERE preordine_id = ?", 
                                         (pre['id'],), fetchall=True)
-                totale = sum(d['qty'] * d['prezzo_unitario'] for d in dettagli) if dettagli else 0
+                totale = sum(d['qty'] * d['prezzo_unitario'] for d in dettagli)
                 st.metric("💰 Totale", format_currency(totale))
-                st.caption(f"{len(dettagli) if dettagli else 0} piatti")
+                st.caption(f"{len(dettagli)} piatti")
             
             with col3:
                 if stato == 'IN_ATTESA':
@@ -1865,25 +1796,22 @@ def show_preordini_stato(stato):
             st.markdown("##### 🍽️ Piatti ordinati:")
             
             # Recupera i dettagli se non l'hai già fatto
-            if 'dettagli' not in locals() or not dettagli:
+            if 'dettagli' not in locals():
                 dettagli = esegui_query("SELECT * FROM preordini_dettaglio WHERE preordine_id = ?", 
                                         (pre['id'],), fetchall=True)
             
-            if dettagli:
-                for d in dettagli:
-                    cols = st.columns([4, 1, 2])
-                    with cols[0]:
-                        st.markdown(f"**{d['qty']}x {d['piatto_nome']}**")
-                    with cols[1]:
-                        st.markdown(f"€{d['prezzo_unitario']:.2f}")
-                    with cols[2]:
-                        st.markdown(f"**€{d['qty'] * d['prezzo_unitario']:.2f}**")
-                    
-                    # Mostra note del piatto
-                    if d.get('note') and d['note'] not in ['[]', '{}', '']:
-                        st.caption(f"  📝 {d['note']}")
-            else:
-                st.caption("Nessun dettaglio disponibile")
+            for d in dettagli:
+                cols = st.columns([4, 1, 2])
+                with cols[0]:
+                    st.markdown(f"**{d['qty']}x {d['piatto_nome']}**")
+                with cols[1]:
+                    st.markdown(f"€{d['prezzo_unitario']:.2f}")
+                with cols[2]:
+                    st.markdown(f"**€{d['qty'] * d['prezzo_unitario']:.2f}**")
+                
+                # Mostra note del piatto
+                if d.get('note') and d['note'] not in ['[]', '{}', '']:
+                    st.caption(f"  📝 {d['note']}")
 
 
 def show_preordini_storico():
