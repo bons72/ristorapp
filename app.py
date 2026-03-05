@@ -1802,12 +1802,14 @@ def show_preordini_stato(stato):
     # DEBUG: mostra cosa stiamo cercando
     st.caption(f"🔍 Ricerca pre-ordini con stato: **{stato}**")
     
-    # Recupera i pre-ordini con quel stato
+    # Recupera i pre-ordini con quel stato - USA LEFT JOIN per robustezza
     preordini = esegui_query("""
-        SELECT p.*, t.numero as tavolo_numero, s.nome as sala_nome
+        SELECT p.*, 
+               COALESCE(t.numero, '?') as tavolo_numero, 
+               COALESCE(s.nome, 'Sala sconosciuta') as sala_nome
         FROM preordini p
-        JOIN tavoli t ON p.tavolo_id = t.id
-        JOIN sale s ON t.sala_id = s.id
+        LEFT JOIN tavoli t ON p.tavolo_id = t.id
+        LEFT JOIN sale s ON t.sala_id = s.id
         WHERE p.stato = ?
         ORDER BY p.timestamp_creazione DESC
     """, (stato,), fetchall=True)
@@ -1842,9 +1844,9 @@ def show_preordini_stato(stato):
                 # Recupera i dettagli per il totale
                 dettagli = esegui_query("SELECT * FROM preordini_dettaglio WHERE preordine_id = ?", 
                                         (pre['id'],), fetchall=True)
-                totale = sum(d['qty'] * d['prezzo_unitario'] for d in dettagli)
+                totale = sum(d['qty'] * d['prezzo_unitario'] for d in dettagli) if dettagli else 0
                 st.metric("💰 Totale", format_currency(totale))
-                st.caption(f"{len(dettagli)} piatti")
+                st.caption(f"{len(dettagli) if dettagli else 0} piatti")
             
             with col3:
                 if stato == 'IN_ATTESA':
@@ -1863,22 +1865,25 @@ def show_preordini_stato(stato):
             st.markdown("##### 🍽️ Piatti ordinati:")
             
             # Recupera i dettagli se non l'hai già fatto
-            if 'dettagli' not in locals():
+            if 'dettagli' not in locals() or not dettagli:
                 dettagli = esegui_query("SELECT * FROM preordini_dettaglio WHERE preordine_id = ?", 
                                         (pre['id'],), fetchall=True)
             
-            for d in dettagli:
-                cols = st.columns([4, 1, 2])
-                with cols[0]:
-                    st.markdown(f"**{d['qty']}x {d['piatto_nome']}**")
-                with cols[1]:
-                    st.markdown(f"€{d['prezzo_unitario']:.2f}")
-                with cols[2]:
-                    st.markdown(f"**€{d['qty'] * d['prezzo_unitario']:.2f}**")
-                
-                # Mostra note del piatto
-                if d.get('note') and d['note'] not in ['[]', '{}', '']:
-                    st.caption(f"  📝 {d['note']}")
+            if dettagli:
+                for d in dettagli:
+                    cols = st.columns([4, 1, 2])
+                    with cols[0]:
+                        st.markdown(f"**{d['qty']}x {d['piatto_nome']}**")
+                    with cols[1]:
+                        st.markdown(f"€{d['prezzo_unitario']:.2f}")
+                    with cols[2]:
+                        st.markdown(f"**€{d['qty'] * d['prezzo_unitario']:.2f}**")
+                    
+                    # Mostra note del piatto
+                    if d.get('note') and d['note'] not in ['[]', '{}', '']:
+                        st.caption(f"  📝 {d['note']}")
+            else:
+                st.caption("Nessun dettaglio disponibile")
 
 
 def show_preordini_storico():
