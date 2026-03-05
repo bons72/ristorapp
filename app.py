@@ -4688,12 +4688,17 @@ def show_qr_code_generator():
         return
     
     # ============================================================================
-    # CARICA L'URL DAL DATABASE (funzioni già in db.py)
+    # CARICA L'URL DAL DATABASE (ORA CON PERSISTENZA)
     # ============================================================================
     from db import carica_url_pubblico, salva_url_pubblico
     
-    if 'public_url' not in st.session_state:
-        st.session_state.public_url = carica_url_pubblico()
+    # Carica l'URL dal database OGNI VOLTA che la pagina viene caricata
+    # Questo garantisce che eventuali modifiche fatte altrove vengano sempre riflesse
+    database_url = carica_url_pubblico()
+    
+    # Aggiorna la sessione se l'URL nel database è diverso
+    if 'public_url' not in st.session_state or st.session_state.public_url != database_url:
+        st.session_state.public_url = database_url
     
     with st.expander("✏️ MODIFICA URL", expanded=True):
         st.markdown("""
@@ -4713,6 +4718,7 @@ def show_qr_code_generator():
         with col2:
             if st.button("💾 SALVA", type="primary", use_container_width=True):
                 if salva_url_pubblico(nuovo_url):
+                    # Aggiorna immediatamente la sessione e forza il ricaricamento
                     st.session_state.public_url = nuovo_url
                     st.success("✅ URL salvato permanentemente!")
                     st.rerun()
