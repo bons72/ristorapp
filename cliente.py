@@ -550,7 +550,7 @@ def show_cliente_page():
                                             ):
                                                 variazioni_selezionate.append(var)
                             
-                            # Quantità e pulsante aggiungi
+                            # Quantità e pulsante aggiungi con DEBUG
                             col_qty, col_btn = st.columns([1, 2])
                             with col_qty:
                                 qty = st.number_input(
@@ -564,13 +564,20 @@ def show_cliente_page():
                                 )
                             
                             with col_btn:
+                                # DEBUG visibile per questo piatto
+                                st.caption(f"🔍 qty={qty}")
+                                
                                 if st.button("➕ AGGIUNGI", key=f"add_{piatto['id']}_{idx}", use_container_width=True):
+                                    st.write(f"✅ **BOTTONE PREMUTO per {piatto['nome']}**")
+                                    st.write(f"   Quantità selezionata: {qty}")
+                                    st.write(f"   Variazioni selezionate: {len(variazioni_selezionate)}")
+                                    
                                     if qty > 0:
                                         prezzo_totale = piatto['prezzo']
                                         for v in variazioni_selezionate:
                                             prezzo_totale += v['prezzo']
                                         
-                                        st.session_state.cliente_carrello.append({
+                                        nuovo_item = {
                                             'id': piatto['id'],
                                             'nome': piatto['nome'],
                                             'prezzo_base': piatto['prezzo'],
@@ -578,18 +585,28 @@ def show_cliente_page():
                                             'qty': qty,
                                             'variazioni': variazioni_selezionate,
                                             'note': ''
-                                        })
+                                        }
+                                        
+                                        st.write(f"   ➕ Nuovo item: {nuovo_item}")
+                                        st.write(f"   Carrello prima: {len(st.session_state.cliente_carrello)} elementi")
+                                        
+                                        st.session_state.cliente_carrello.append(nuovo_item)
+                                        
+                                        st.write(f"   Carrello dopo: {len(st.session_state.cliente_carrello)} elementi")
                                         st.success(f"✅ {qty}x {piatto['nome']} aggiunto!")
                                         st.rerun()
                                     else:
-                                        st.warning("Seleziona una quantità")
+                                        st.warning("Seleziona una quantità maggiore di 0")
         
         with col_carrello:
             st.markdown("### 🛒 IL TUO ORDINE")
             
             if not st.session_state.cliente_carrello:
                 st.info("👆 Tocca i piatti per iniziare")
+                st.caption("🔍 DEBUG: carrello vuoto")
             else:
+                st.caption(f"🔍 DEBUG: {len(st.session_state.cliente_carrello)} elementi nel carrello")
+                
                 # Raggruppa piatti
                 riassunto = {}
                 for item in st.session_state.cliente_carrello:
@@ -650,11 +667,11 @@ def show_cliente_page():
                 # BOTTONE INVIA ORDINE CON DEBUG
                 # ========================================================================
                 st.markdown("---")
-                st.markdown("##### 🔍 DEBUG BOTTONE")
+                st.markdown("##### 🔍 DEBUG BOTTONE INVIO")
                 st.write(f"Carrello ha **{len(st.session_state.cliente_carrello)}** elementi")
                 
                 if st.button("📨 INVIA ORDINE (DEBUG)", type="primary", use_container_width=True):
-                    st.write("✅ **BOTTONE PREMUTO!**")
+                    st.write("✅ **BOTTONE INVIO PREMUTO!**")
                     st.write(f"Tavolo: {tavolo_id}")
                     st.write(f"Note: {st.session_state.cliente_nota}")
                     st.write(f"Carrello: {len(st.session_state.cliente_carrello)} piatti")
