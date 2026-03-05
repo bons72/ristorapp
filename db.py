@@ -2230,6 +2230,7 @@ def salva_url_pubblico(url):
         """, (url,))
         
         conn.commit()
+        print(f"✅ URL salvato: {url}")
         return True
     except Exception as e:
         print(f"❌ Errore salvataggio URL: {e}")
@@ -2237,6 +2238,7 @@ def salva_url_pubblico(url):
     finally:
         if conn:
             conn.close()
+
 
 def carica_url_pubblico():
     """Carica l'URL pubblico dal database"""
@@ -2257,26 +2259,42 @@ def carica_url_pubblico():
         """)
         conn.commit()
         
+        # Determina l'URL cloud di default
+        cloud_default_url = "https://ristorapp-bons72.streamlit.app"
+        
         # Recupera l'URL
         cursor.execute("SELECT valore FROM config WHERE chiave = 'public_url'")
         risultato = cursor.fetchone()
         
-        if risultato and risultato[0]:
-            url = risultato[0]
-            # Se siamo in Streamlit Cloud e l'URL è locale, correggi
-            if os.environ.get('STREAMLIT_CLOUD') and 'localhost' in url:
-                # Forza l'URL corretto per il cloud
-                return "https://ristorapp-bons72.streamlit.app"
-            return url
+        # CASO 1: Siamo in Streamlit Cloud
+        if os.environ.get('STREAMLIT_CLOUD'):
+            if risultato and risultato[0] and 'localhost' not in risultato[0]:
+                # C'è un URL valido salvato, usalo
+                return risultato[0]
+            else:
+                # Non c'è URL valido salvato, usa il default cloud E SALVALO
+                try:
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO config (chiave, valore, tipo, updated_at)
+                        VALUES ('public_url', ?, 'text', CURRENT_TIMESTAMP)
+                    """, (cloud_default_url,))
+                    conn.commit()
+                    print(f"✅ URL cloud salvato automaticamente: {cloud_default_url}")
+                except:
+                    pass
+                return cloud_default_url
+        
+        # CASO 2: Siamo in locale
         else:
-            # Se non c'è URL salvato, usa il default in base all'ambiente
-            if os.environ.get('STREAMLIT_CLOUD'):
-                return "https://ristorapp-bons72.streamlit.app"
-            return "http://localhost:8501"
+            if risultato and risultato[0]:
+                return risultato[0]
+            else:
+                # In locale, default localhost
+                return "http://localhost:8501"
             
     except Exception as e:
         print(f"❌ Errore caricamento URL: {e}")
-        # In caso di errore, restituisci il default corretto per l'ambiente
+        # Fallback in base all'ambiente
         if os.environ.get('STREAMLIT_CLOUD'):
             return "https://ristorapp-bons72.streamlit.app"
         return "http://localhost:8501"
@@ -2284,6 +2302,7 @@ def carica_url_pubblico():
     finally:
         if conn:
             conn.close()
+
 
 # ============================================================================
 # FUNZIONE DI VERIFICA DATABASE
