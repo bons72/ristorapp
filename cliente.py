@@ -226,10 +226,19 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
     """Salva pre-ordine con verifica e restituisce l'ID"""
     conn = None
     try:
+        # DEBUG SU FILE
+        with open('/tmp/cliente_debug.log', 'a') as f:
+            f.write(f"\n[{datetime.now()}] 🚀 FUNZIONE CHIAMATA - Tavolo: {tavolo_id}, Carrello: {len(carrello)} piatti\n")
+            f.write(f"   Note: {note}\n")
+        
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # DEBUG
+        with open('/tmp/cliente_debug.log', 'a') as f:
+            f.write(f"   📝 Inserimento in preordini...\n")
         
         cursor.execute("""
             INSERT INTO preordini (tavolo_id, stato, note, timestamp_creazione)
@@ -238,7 +247,10 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
         
         preordine_id = cursor.lastrowid
         
-        for item in carrello:
+        with open('/tmp/cliente_debug.log', 'a') as f:
+            f.write(f"   ✅ Pre-ordine creato ID: {preordine_id}\n")
+        
+        for idx, item in enumerate(carrello):
             variazioni_json = json.dumps(item.get('variazioni', []))
             
             cursor.execute("""
@@ -254,13 +266,24 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
                 variazioni_json,
                 item.get('note', '')
             ))
+            
+            with open('/tmp/cliente_debug.log', 'a') as f:
+                f.write(f"   ➕ Piatto {idx+1}: {item['qty']}x {item['nome']} (prezzo: {item['prezzo']})\n")
         
         conn.commit()
+        
+        with open('/tmp/cliente_debug.log', 'a') as f:
+            f.write(f"   ✅ COMMIT completato per ordine {preordine_id}\n")
+            f.write(f"   🎉 ORDINE SALVATO CON SUCCESSO!\n")
+        
         return preordine_id
         
     except Exception as e:
         if conn:
             conn.rollback()
+        with open('/tmp/cliente_debug.log', 'a') as f:
+            f.write(f"   ❌ ERRORE: {e}\n")
+            f.write(f"{traceback.format_exc()}\n")
         print(f"❌ ERRORE: {e}")
         traceback.print_exc()
         return None
@@ -411,6 +434,15 @@ def show_cliente_page():
                 font-size: 1.1rem !important;
                 padding: 0.5rem 1rem !important;
             }
+            
+            /* DEBUG - evidenzia i messaggi di debug */
+            .debug-message {
+                background-color: #fff3cd;
+                border-left: 5px solid #ffc107;
+                padding: 10px;
+                margin: 10px 0;
+                font-family: monospace;
+            }
         </style>
     """, unsafe_allow_html=True)
     
@@ -428,6 +460,29 @@ def show_cliente_page():
     header_html += f'<div class="header-tavolo">Tavolo {tavolo_id}</div></div>'
     
     st.markdown(header_html, unsafe_allow_html=True)
+    
+    # ========================================================================
+    # DEBUG VISIBILE IN ALTO
+    # ========================================================================
+    with st.expander("🔍 DEBUG INFORMAZIONI", expanded=True):
+        st.markdown('<div class="debug-message">', unsafe_allow_html=True)
+        st.write(f"📦 **Database path:** {DB_PATH}")
+        st.write(f"🪑 **Tavolo ID:** {tavolo_id}")
+        st.write(f"🛒 **Carrello in sessione:** {len(st.session_state.get('cliente_carrello', []))} piatti")
+        
+        # Test connessione database
+        try:
+            conn_test = sqlite3.connect(DB_PATH)
+            cursor_test = conn_test.cursor()
+            cursor_test.execute("SELECT COUNT(*) FROM preordini")
+            count = cursor_test.fetchone()[0]
+            st.write(f"📊 **Record in preordini:** {count}")
+            conn_test.close()
+            st.success("✅ Connessione database OK")
+        except Exception as e:
+            st.error(f"❌ Errore database: {e}")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
     
     # ========================================================================
     # TABS: NUOVO ORDINE | STORICO
@@ -591,9 +646,26 @@ def show_cliente_page():
                     )
                     st.session_state.cliente_nota = note
                 
-                if st.button("📨 INVIA ORDINE", type="primary", use_container_width=True):
+                # ========================================================================
+                # BOTTONE INVIA ORDINE CON DEBUG
+                # ========================================================================
+                st.markdown("---")
+                st.markdown("##### 🔍 DEBUG BOTTONE")
+                st.write(f"Carrello ha **{len(st.session_state.cliente_carrello)}** elementi")
+                
+                if st.button("📨 INVIA ORDINE (DEBUG)", type="primary", use_container_width=True):
+                    st.write("✅ **BOTTONE PREMUTO!**")
+                    st.write(f"Tavolo: {tavolo_id}")
+                    st.write(f"Note: {st.session_state.cliente_nota}")
+                    st.write(f"Carrello: {len(st.session_state.cliente_carrello)} piatti")
+                    
                     if st.session_state.cliente_carrello:
-                        with st.spinner("Invio in corso..."):
+                        with st.spinner("Invio in corso... (controlla i log)"):
+                            # Mostra i primi 2 piatti per debug
+                            st.write("**Primi 2 piatti del carrello:**")
+                            for i, item in enumerate(st.session_state.cliente_carrello[:2]):
+                                st.write(f"  {i+1}. {item['qty']}x {item['nome']} - €{item['prezzo']}")
+                            
                             preordine_id = salva_preordine_con_verifica(
                                 tavolo_id,
                                 st.session_state.cliente_carrello,
@@ -601,14 +673,15 @@ def show_cliente_page():
                             )
                             
                             if preordine_id:
-                                st.success(f"✅ Ordine #{preordine_id} inviato!")
+                                st.success(f"✅ **SUCCESSO!** Ordine #{preordine_id} inviato!")
                                 st.balloons()
                                 st.session_state.cliente_carrello = []
                                 st.session_state.cliente_nota = ""
-                                time.sleep(2)
+                                time.sleep(3)
                                 st.rerun()
                             else:
-                                st.error("❌ Errore nell'invio. Riprova.")
+                                st.error("❌ **ERRORE** nell'invio. Controlla i log.")
+                                st.info("Guarda i log su Streamlit Cloud (Manage app → Logs)")
                     else:
                         st.warning("Il carrello è vuoto")
     
