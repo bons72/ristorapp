@@ -2261,13 +2261,26 @@ def carica_url_pubblico():
         cursor.execute("SELECT valore FROM config WHERE chiave = 'public_url'")
         risultato = cursor.fetchone()
         
-        if risultato:
-            return risultato[0]
+        if risultato and risultato[0]:
+            url = risultato[0]
+            # Se siamo in Streamlit Cloud e l'URL è locale, correggi
+            if os.environ.get('STREAMLIT_CLOUD') and 'localhost' in url:
+                # Forza l'URL corretto per il cloud
+                return "https://ristorapp-bons72.streamlit.app"
+            return url
         else:
+            # Se non c'è URL salvato, usa il default in base all'ambiente
+            if os.environ.get('STREAMLIT_CLOUD'):
+                return "https://ristorapp-bons72.streamlit.app"
             return "http://localhost:8501"
+            
     except Exception as e:
         print(f"❌ Errore caricamento URL: {e}")
+        # In caso di errore, restituisci il default corretto per l'ambiente
+        if os.environ.get('STREAMLIT_CLOUD'):
+            return "https://ristorapp-bons72.streamlit.app"
         return "http://localhost:8501"
+        
     finally:
         if conn:
             conn.close()
