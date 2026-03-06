@@ -632,6 +632,7 @@ def show_sidebar():
                 ("📋 NOTIFICHE", "notifiche"),
                 ("💾 BACKUP", "backup"),
                 ("🧹 PULIZIA BACKUP", "pulizia_backup"),
+                ("🔍 DEBUG ESTREMO", "debug_estremo"),
                 ("⚙️ AMMINISTRAZIONE", "admin")
             ]
         elif st.session_state.user_role == 'CAMERIERE':
@@ -3451,7 +3452,9 @@ def show_gestione_piatti():
                     
                     stato = "✅ Disponibile" if p['disponibile'] else "❌ Non disponibile"
                     st.markdown(stato)
-                    st.caption(f"Tempo: {p['tempo_preparazione']} min")
+                    # Usa get() per evitare KeyError se la chiave non esiste
+                    tempo = p.get('tempo_preparazione', 'N/A')
+                    st.caption(f"⏱️ Tempo: {tempo} min")
                 
                 with col2:
                     tab_pub, tab_priv = st.tabs(["📖 Pubblico", "🔒 Privato"])
