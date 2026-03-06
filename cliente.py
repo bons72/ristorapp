@@ -365,8 +365,16 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
             f.write(f"\n[{datetime.now()}] 🚀 FUNZIONE CHIAMATA - Tavolo: {tavolo_id}, Carrello: {len(carrello)} piatti\n")
             f.write(f"   Note: {note}\n")
         
+        # VERIFICA CONNESSIONE
+        st.write("🔍 **DEBUG:** Connessione al database...")
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        st.write("✅ Connessione OK")
+        
+        # VERIFICA TABELLE
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tabelle = cursor.fetchall()
+        st.write(f"📋 Tabelle trovate: {[t[0] for t in tabelle]}")
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
@@ -374,12 +382,14 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
         with open('/tmp/cliente_debug.log', 'a') as f:
             f.write(f"   📝 Inserimento in preordini...\n")
         
+        st.write("📝 Inserimento in preordini...")
         cursor.execute("""
             INSERT INTO preordini (tavolo_id, stato, note, timestamp_creazione)
             VALUES (?, 'IN_ATTESA', ?, ?)
         """, (tavolo_id, note, timestamp))
         
         preordine_id = cursor.lastrowid
+        st.write(f"✅ Pre-ordine creato ID: {preordine_id}")
         
         with open('/tmp/cliente_debug.log', 'a') as f:
             f.write(f"   ✅ Pre-ordine creato ID: {preordine_id}\n")
@@ -400,21 +410,35 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
                 variazioni_json,
                 item.get('note', '')
             ))
+            st.write(f"   ➕ Inserito piatto {idx+1}: {item['qty']}x {item['nome']}")
             
             with open('/tmp/cliente_debug.log', 'a') as f:
                 f.write(f"   ➕ Piatto {idx+1}: {item['qty']}x {item['nome']} (prezzo: {item['prezzo']})\n")
         
+        st.write("💾 Commit delle modifiche...")
         conn.commit()
+        st.write("✅ Commit completato!")
         
         with open('/tmp/cliente_debug.log', 'a') as f:
             f.write(f"   ✅ COMMIT completato per ordine {preordine_id}\n")
             f.write(f"   🎉 ORDINE SALVATO CON SUCCESSO!\n")
+        
+        # VERIFICA FINALE
+        cursor.execute("SELECT COUNT(*) FROM preordini WHERE id = ?", (preordine_id,))
+        if cursor.fetchone()[0] > 0:
+            st.success(f"✅ Verifica: ordine #{preordine_id} presente nel database!")
+        else:
+            st.error(f"❌ ERRORE: ordine #{preordine_id} NON trovato dopo il commit!")
         
         return preordine_id
         
     except Exception as e:
         if conn:
             conn.rollback()
+        errore = str(e)
+        st.error(f"❌ **ERRORE DATABASE:** {errore}")
+        st.code(traceback.format_exc())
+        
         with open('/tmp/cliente_debug.log', 'a') as f:
             f.write(f"   ❌ ERRORE: {e}\n")
             f.write(f"{traceback.format_exc()}\n")
