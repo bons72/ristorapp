@@ -20,7 +20,11 @@ from typing import Optional, Dict, List, Any, Tuple
 def get_database_path():
     """Restituisce il percorso corretto per il database in base all'ambiente"""
     if os.environ.get('STREAMLIT_CLOUD'):
-        return os.path.join(tempfile.gettempdir(), "ristorante.db")
+        # Usa una directory persistente nella home dell'utente
+        persistent_dir = os.path.join(os.path.expanduser('~'), '.ristorapp_data')
+        # Crea la directory se non esiste
+        os.makedirs(persistent_dir, exist_ok=True)
+        return os.path.join(persistent_dir, "ristorante.db")
     else:
         return "ristorante.db"
 
@@ -117,14 +121,19 @@ def get_db_connection(init_mode: bool = False):
 def esegui_query(query: str, params: tuple = (), 
                  fetchone: bool = False, fetchall: bool = False, 
                  commit: bool = False) -> Any:
-    """Esegue query SQL in modo sicuro"""
+    """Esegue query SQL in modo sicuro - VERSIONE CORRETTA"""
     
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = dict_factory
-    cursor = conn.cursor()
-    
+    conn = None
     try:
+        # Aumenta il timeout per evitare lock
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn.row_factory = dict_factory
+        cursor = conn.cursor()
+        
+        # Esegui la query
         cursor.execute(query, params)
+        
+        # Gestisci i risultati
         if commit:
             conn.commit()
             lastrowid = cursor.lastrowid
@@ -138,10 +147,24 @@ def esegui_query(query: str, params: tuple = (),
             result = cursor.fetchall()
             conn.close()
             return result
-        conn.close()
-        return cursor
-    except sqlite3.Error as e:
-        conn.close()
+        else:
+            conn.close()
+            return cursor
+            
+    except sqlite3.OperationalError as e:
+        if conn:
+            conn.close()
+        if "database is locked" in str(e):
+            logger.error(f"Database locked, riprova: {e}")
+            # Riprova una volta dopo 1 secondo
+            time.sleep(1)
+            return esegui_query(query, params, fetchone, fetchall, commit)
+        else:
+            logger.error(f"Query error: {e}\nQuery: {query[:100]}...\nParams: {params}")
+            raise
+    except Exception as e:
+        if conn:
+            conn.close()
         logger.error(f"Query error: {e}\nQuery: {query[:100]}...\nParams: {params}")
         raise
 
