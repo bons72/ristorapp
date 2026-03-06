@@ -18,7 +18,9 @@ import json
 def get_db_path():
     """Restituisce il percorso del database"""
     if os.environ.get('STREAMLIT_CLOUD'):
-        return os.path.join(tempfile.gettempdir(), "ristorante.db")
+        persistent_dir = os.path.join(os.path.expanduser('~'), '.ristorapp_data')
+        os.makedirs(persistent_dir, exist_ok=True)
+        return os.path.join(persistent_dir, "ristorante.db")
     elif os.environ.get('DB_PATH'):
         return os.environ.get('DB_PATH')
     else:
@@ -360,12 +362,24 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
     """Salva pre-ordine con verifica e restituisce l'ID"""
     conn = None
     try:
-        # DEBUG SU FILE
-        with open('/tmp/cliente_debug.log', 'a') as f:
-            f.write(f"\n[{datetime.now()}] 🚀 FUNZIONE CHIAMATA - Tavolo: {tavolo_id}, Carrello: {len(carrello)} piatti\n")
-            f.write(f"   Note: {note}\n")
+        # DEBUG PERCORSO DATABASE
+        st.write(f"🔍 **DEBUG PERCORSO DATABASE:** {DB_PATH}")
         
-        # VERIFICA CONNESSIONE
+        import os
+        if os.path.exists(DB_PATH):
+            st.write(f"✅ File database esiste (dimensione: {os.path.getsize(DB_PATH)} bytes)")
+        else:
+            st.warning(f"⚠️ File database NON esiste! Verrà creato")
+        
+        # DEBUG SU FILE (solo per debugging locale)
+        try:
+            with open('/tmp/cliente_debug.log', 'a') as f:
+                f.write(f"\n[{datetime.now()}] 🚀 FUNZIONE CHIAMATA - Tavolo: {tavolo_id}, Carrello: {len(carrello)} piatti\n")
+                f.write(f"   Note: {note}\n")
+                f.write(f"   DB_PATH: {DB_PATH}\n")
+        except:
+            pass
+        
         st.write("🔍 **DEBUG:** Connessione al database...")
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -378,10 +392,6 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
-        # DEBUG
-        with open('/tmp/cliente_debug.log', 'a') as f:
-            f.write(f"   📝 Inserimento in preordini...\n")
-        
         st.write("📝 Inserimento in preordini...")
         cursor.execute("""
             INSERT INTO preordini (tavolo_id, stato, note, timestamp_creazione)
@@ -391,11 +401,12 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
         preordine_id = cursor.lastrowid
         st.write(f"✅ Pre-ordine creato ID: {preordine_id}")
         
-        with open('/tmp/cliente_debug.log', 'a') as f:
-            f.write(f"   ✅ Pre-ordine creato ID: {preordine_id}\n")
-        
         for idx, item in enumerate(carrello):
+            # Serializza le variazioni in JSON
             variazioni_json = json.dumps(item.get('variazioni', []))
+            
+            # ⚠️ CORREZIONE: usa prezzo_base per prezzo_unitario
+            prezzo_base = item.get('prezzo_base', item.get('prezzo', 0))
             
             cursor.execute("""
                 INSERT INTO preordini_dettaglio 
@@ -406,22 +417,15 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
                 item['id'],
                 item['nome'],
                 item['qty'],
-                item['prezzo'],
+                prezzo_base,  # ✅ Ora usa il prezzo base corretto
                 variazioni_json,
                 item.get('note', '')
             ))
-            st.write(f"   ➕ Inserito piatto {idx+1}: {item['qty']}x {item['nome']}")
-            
-            with open('/tmp/cliente_debug.log', 'a') as f:
-                f.write(f"   ➕ Piatto {idx+1}: {item['qty']}x {item['nome']} (prezzo: {item['prezzo']})\n")
+            st.write(f"   ➕ Inserito piatto {idx+1}: {item['qty']}x {item['nome']} (prezzo base: {prezzo_base})")
         
         st.write("💾 Commit delle modifiche...")
         conn.commit()
         st.write("✅ Commit completato!")
-        
-        with open('/tmp/cliente_debug.log', 'a') as f:
-            f.write(f"   ✅ COMMIT completato per ordine {preordine_id}\n")
-            f.write(f"   🎉 ORDINE SALVATO CON SUCCESSO!\n")
         
         # VERIFICA FINALE
         cursor.execute("SELECT COUNT(*) FROM preordini WHERE id = ?", (preordine_id,))
@@ -439,9 +443,14 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
         st.error(f"❌ **ERRORE DATABASE:** {errore}")
         st.code(traceback.format_exc())
         
-        with open('/tmp/cliente_debug.log', 'a') as f:
-            f.write(f"   ❌ ERRORE: {e}\n")
-            f.write(f"{traceback.format_exc()}\n")
+        # Prova a scrivere l'errore su file
+        try:
+            with open('/tmp/cliente_debug.log', 'a') as f:
+                f.write(f"   ❌ ERRORE: {e}\n")
+                f.write(f"{traceback.format_exc()}\n")
+        except:
+            pass
+        
         print(f"❌ ERRORE: {e}")
         traceback.print_exc()
         return None
@@ -531,16 +540,24 @@ def show_cliente_page():
     if isinstance(tavolo_id, list):
         tavolo_id = tavolo_id[0] if tavolo_id else None
     
+    # DEBUG TAVOLO
+    st.write(f"🔍 **DEBUG PARAMETRI URL:**")
+    st.write(f"   - tavolo_id grezzo: {tavolo_id}")
+    st.write(f"   - Tutti i parametri: {dict(st.query_params)}")
+    
     if not tavolo_id:
-        st.error("❌ QR Code non valido")
+        st.error("❌ QR Code non valido - parametro 'tavolo' mancante")
         st.info("Contatta il personale")
         return
     
     try:
         tavolo_id = int(tavolo_id)
+        st.write(f"   ✅ Tavolo ID convertito: {tavolo_id}")
     except:
-        st.error("❌ Tavolo non valido")
+        st.error(f"❌ Tavolo non valido: '{tavolo_id}' non è un numero")
         return
+    
+    # ... resto della funzione ...
     
     # ========================================================================
     # RECUPERA INFO BRAND
