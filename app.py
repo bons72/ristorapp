@@ -3787,10 +3787,11 @@ def show_gestione_variazioni():
                     st.rerun()
     
     with col2:
+        # CORREZIONE: usa LEFT JOIN invece di JOIN
         variazioni = esegui_query("""
-            SELECT v.*, r.nome as reparto_nome
+            SELECT v.*, COALESCE(r.nome, 'Reparto sconosciuto') as reparto_nome
             FROM variazioni v
-            JOIN reparti r ON v.reparto_id = r.id
+            LEFT JOIN reparti r ON v.reparto_id = r.id
             ORDER BY r.nome, v.ordine, v.nome
         """, fetchall=True)
         
