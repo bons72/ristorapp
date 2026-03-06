@@ -27,6 +27,100 @@ def get_db_path():
 DB_PATH = get_db_path()
 
 # ============================================================================
+# CREA DIRETTAMENTE LE TABELLE SE NON ESISTONO
+# ============================================================================
+def crea_tabelle_se_needed():
+    """Crea le tabelle necessarie per il cliente"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Crea tabella categorie
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS categorie (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT UNIQUE NOT NULL,
+                reparto_id INTEGER NOT NULL,
+                icona TEXT DEFAULT '🍽️',
+                ordine INTEGER DEFAULT 999,
+                attiva INTEGER DEFAULT 1
+            )
+        """)
+        
+        # Crea tabella piatti
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS piatti (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT UNIQUE NOT NULL,
+                categoria_id INTEGER NOT NULL,
+                descrizione_pubblica TEXT,
+                prezzo REAL NOT NULL,
+                disponibile INTEGER DEFAULT 1,
+                foto_data BLOB
+            )
+        """)
+        
+        # Crea tabella variazioni
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS variazioni (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT UNIQUE NOT NULL,
+                prezzo REAL DEFAULT 0,
+                reparto_id INTEGER NOT NULL,
+                attivo INTEGER DEFAULT 1
+            )
+        """)
+        
+        # Crea tabella preordini
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS preordini (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tavolo_id INTEGER NOT NULL,
+                stato TEXT DEFAULT 'IN_ATTESA',
+                note TEXT,
+                timestamp_creazione TIMESTAMP
+            )
+        """)
+        
+        # Crea tabella preordini_dettaglio
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS preordini_dettaglio (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                preordine_id INTEGER NOT NULL,
+                piatto_id INTEGER NOT NULL,
+                piatto_nome TEXT NOT NULL,
+                qty INTEGER DEFAULT 1,
+                prezzo_unitario REAL NOT NULL,
+                variazioni TEXT DEFAULT '[]',
+                note TEXT
+            )
+        """)
+        
+        # Inserisci dati di esempio se necessario
+        cursor.execute("SELECT COUNT(*) FROM categorie")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("INSERT INTO categorie (id, nome, reparto_id, icona, ordine) VALUES (1, 'ANTIPASTI', 1, '🥗', 1)")
+            cursor.execute("INSERT INTO categorie (id, nome, reparto_id, icona, ordine) VALUES (2, 'PRIMI', 1, '🍝', 2)")
+            cursor.execute("INSERT INTO categorie (id, nome, reparto_id, icona, ordine) VALUES (3, 'SECONDI', 1, '🥩', 3)")
+        
+        cursor.execute("SELECT COUNT(*) FROM piatti")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("INSERT INTO piatti (id, nome, categoria_id, prezzo) VALUES (1, 'Bruschetta', 1, 6.50)")
+            cursor.execute("INSERT INTO piatti (id, nome, categoria_id, prezzo) VALUES (2, 'Spaghetti Carbonara', 2, 12.00)")
+            cursor.execute("INSERT INTO piatti (id, nome, categoria_id, prezzo) VALUES (3, 'Bistecca alla Griglia', 3, 18.00)")
+        
+        conn.commit()
+        conn.close()
+        print("✅ Tabelle create/verificate da cliente.py")
+        return True
+    except Exception as e:
+        print(f"❌ Errore creazione tabelle: {e}")
+        return False
+
+# CHIAMA SUBITO LA FUNZIONE
+crea_tabelle_se_needed()
+
+# ============================================================================
 # ATTENDI CHE IL DATABASE SIA PRONTO
 # ============================================================================
 def attendi_database():
