@@ -698,8 +698,9 @@ def populate_initial_data(cursor, conn):
         logger.info("🏢 Creazione BRAND...")
         
         # Prima verifica se ci sono utenti che referenziano il brand
-        cursor.execute("SELECT COUNT(*) FROM utenti WHERE brand_id = 1")
-        utenti_con_brand = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) as count FROM utenti WHERE brand_id = 1")
+        result = cursor.fetchone()
+        utenti_con_brand = result['count'] if result else 0
         
         if utenti_con_brand > 0:
             # Se ci sono utenti, aggiorna invece di cancellare
