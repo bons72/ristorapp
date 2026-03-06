@@ -867,14 +867,26 @@ def show_cliente_page():
                     st.session_state.cliente_nota = note
                 
                 # ========================================================================
-                # BOTTONE INVIA ORDINE CON NOTIFICHE E STAMPE
+                # BOTTONE INVIA ORDINE CON DEBUG SU FILE
                 # ========================================================================
                 st.markdown("---")
                 st.markdown("##### 🔍 DEBUG BOTTONE INVIO")
+                
+                # Scrivi su file all'avvio della pagina (solo per debug)
+                with open('/tmp/cliente_click.log', 'a') as f:
+                    f.write(f"\n[{datetime.now()}] PAGINA CARICATA - Tavolo: {tavolo_id}, Carrello: {len(st.session_state.cliente_carrello)}\n")
+                
                 st.write(f"Carrello ha **{len(st.session_state.cliente_carrello)}** elementi")
                 
                 if st.button("📨 INVIA ORDINE (DEBUG)", type="primary", use_container_width=True):
-                    st.write("✅ **BOTTONE INVIO PREMUTO!**")
+                    # Scrivi su file quando il bottone viene premuto
+                    with open('/tmp/cliente_click.log', 'a') as f:
+                        f.write(f"\n[{datetime.now()}] ✅ BOTTONE PREMUTO!\n")
+                        f.write(f"   Tavolo: {tavolo_id}\n")
+                        f.write(f"   Note: {st.session_state.cliente_nota}\n")
+                        f.write(f"   Carrello: {len(st.session_state.cliente_carrello)} piatti\n")
+                    
+                    st.write("✅ **BOTTONE INVIO PREMUTO!** (controlla /tmp/cliente_click.log)")
                     st.write(f"Tavolo: {tavolo_id}")
                     st.write(f"Note: {st.session_state.cliente_nota}")
                     st.write(f"Carrello: {len(st.session_state.cliente_carrello)} piatti")
