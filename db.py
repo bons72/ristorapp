@@ -22,7 +22,6 @@ def get_database_path():
     if os.environ.get('STREAMLIT_CLOUD'):
         # Usa una directory persistente nella home dell'utente
         persistent_dir = os.path.join(os.path.expanduser('~'), '.ristorapp_data')
-        # Crea la directory se non esiste
         os.makedirs(persistent_dir, exist_ok=True)
         return os.path.join(persistent_dir, "ristorante.db")
     else:
@@ -697,11 +696,25 @@ def populate_initial_data(cursor, conn):
         # 6. BRAND (ERA 4, ora 6)
         # ========================================================================
         logger.info("🏢 Creazione BRAND...")
-        cursor.execute("DELETE FROM brand WHERE id = 1")
-        cursor.execute("""
-            INSERT OR REPLACE INTO brand (id, nome, partita_iva) 
-            VALUES (1, 'RISTORAPP', '01234567890')
-        """)
+        
+        # Prima verifica se ci sono utenti che referenziano il brand
+        cursor.execute("SELECT COUNT(*) FROM utenti WHERE brand_id = 1")
+        utenti_con_brand = cursor.fetchone()[0]
+        
+        if utenti_con_brand > 0:
+            # Se ci sono utenti, aggiorna invece di cancellare
+            logger.info(f"   ⚠️ Trovati {utenti_con_brand} utenti collegati al brand. Aggiorno invece di cancellare...")
+            cursor.execute("""
+                UPDATE brand SET nome = ?, partita_iva = ? WHERE id = 1
+            """, ('RISTORAPP', '01234567890'))
+        else:
+            # Se non ci sono utenti, cancella e reinserisci
+            cursor.execute("DELETE FROM brand WHERE id = 1")
+            cursor.execute("""
+                INSERT OR REPLACE INTO brand (id, nome, partita_iva) 
+                VALUES (1, 'RISTORAPP', '01234567890')
+            """)
+        
         conn.commit()
         logger.info("   ✅ Brand OK")
         
