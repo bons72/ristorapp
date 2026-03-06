@@ -1672,49 +1672,51 @@ def show_preordini():
     st.title("📋 Pre-ordini Clienti")
     
     # ============================================================================
-    # DEBUG - Verifica database (COMPATTO)
+    # DEBUG DIRETTO SUL DATABASE (SENZA JOIN)
     # ============================================================================
-    with st.expander("🔍 DEBUG DATABASE", expanded=False):
+    with st.expander("🔍 DEBUG DATABASE RAW", expanded=True):
         try:
-            # Mostra il percorso del database
-            st.write(f"📦 **Database path:** {DB_PATH}")
-            
-            # Verifica se la tabella esiste
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='preordini'")
-            if cursor.fetchone():
-                st.success("✅ Tabella 'preordini' esiste")
-                
-                # Conta i record per stato
-                cursor.execute("SELECT stato, COUNT(*) as cnt FROM preordini GROUP BY stato")
-                records = cursor.fetchall()
-                
-                if records:
-                    st.markdown("##### 📊 Pre-ordini per stato:")
-                    for r in records:
-                        st.write(f"  • {r[0]}: {r[1]}")
-                else:
-                    st.warning("⚠️ Nessun record in 'preordini'")
-                    
-                # Mostra ID dei record recenti
-                cursor.execute("""
-                    SELECT id, tavolo_id, stato, timestamp_creazione 
-                    FROM preordini 
-                    ORDER BY id DESC LIMIT 3
-                """)
-                recenti = cursor.fetchall()
-                if recenti:
-                    st.markdown("##### 🔄 Ultimi 3 pre-ordini:")
-                    for r in recenti:
-                        st.write(f"  • ID:{r[0]}, Tav:{r[1]}, {r[2]}, {r[3]}")
+            
+            # 1. Quanti record in preordini?
+            cursor.execute("SELECT COUNT(*) FROM preordini")
+            count = cursor.fetchone()[0]
+            st.write(f"📊 **Record in preordini:** {count}")
+            
+            # 2. Mostra TUTTI i record con i campi grezzi
+            cursor.execute("SELECT id, tavolo_id, stato, note, timestamp_creazione FROM preordini ORDER BY id DESC")
+            records = cursor.fetchall()
+            
+            if records:
+                st.write("**📋 Contenuto tabella preordini:**")
+                for r in records:
+                    st.write(f"   • ID:{r[0]}, Tavolo:{r[1]}, Stato:'{r[2]}', Note:'{r[3]}', Data:{r[4]}")
             else:
-                st.error("❌ Tabella 'preordini' NON esiste!")
+                st.warning("⚠️ Nessun record in preordini")
+            
+            # 3. Controlla se ci sono tavoli
+            cursor.execute("SELECT COUNT(*) FROM tavoli")
+            tavoli_count = cursor.fetchone()[0]
+            st.write(f"🪑 **Tavoli nel database:** {tavoli_count}")
+            
+            if tavoli_count > 0:
+                cursor.execute("SELECT id, numero FROM tavoli LIMIT 5")
+                tavoli = cursor.fetchall()
+                st.write("**Primi 5 tavoli:**")
+                for t in tavoli:
+                    st.write(f"   • ID:{t[0]}, Numero:{t[1]}")
             
             conn.close()
             
         except Exception as e:
-            st.error(f"❌ Errore nel debug: {e}")
+            st.error(f"❌ Errore debug: {e}")
+    
+    # ============================================================================
+    # DEBUG - Verifica database (COMPATTO) - IL TUO CODICE ESISTENTE
+    # ============================================================================
+    with st.expander("🔍 DEBUG DATABASE", expanded=False):
+        # ... il tuo codice esistente rimane qui ...
     
     # ============================================================================
     # TABS principali
