@@ -27,6 +27,36 @@ def get_db_path():
 DB_PATH = get_db_path()
 
 # ============================================================================
+# ATTENDI CHE IL DATABASE SIA PRONTO
+# ============================================================================
+def attendi_database():
+    """Aspetta che le tabelle necessarie siano create"""
+    max_tentativi = 10
+    tentativo = 0
+    
+    while tentativo < max_tentativi:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='categorie'")
+            if cursor.fetchone():
+                conn.close()
+                print(f"✅ Database pronto al tentativo {tentativo + 1}")
+                return True
+            conn.close()
+        except:
+            pass
+        
+        tentativo += 1
+        time.sleep(1)  # Aspetta 1 secondo tra tentativi
+    
+    print("❌ Database non pronto dopo 10 tentativi")
+    return False
+
+# Chiama la funzione all'avvio
+attendidb = attendi_database()
+
+# ============================================================================
 # FUNZIONI PER IL BRAND
 # ============================================================================
 @st.cache_data(ttl=3600)
@@ -71,6 +101,16 @@ def get_brand_info():
 def get_menu_completo():
     """Recupera il menu completo con piatti e relative variazioni"""
     try:
+        # Verifica che le tabelle esistano
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='categorie'")
+        if not cursor.fetchone():
+            print("⚠️ Tabella categorie non ancora pronta")
+            conn.close()
+            return []
+        conn.close()
+        
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -290,6 +330,75 @@ def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
     finally:
         if conn:
             conn.close()
+
+# ============================================================================
+# NOTIFICHE E STAMPA
+# ============================================================================
+def invia_notifiche_e_stampe(preordine_id, tavolo_id, carrello, note):
+    """Invia notifiche in sala e comande in cucina"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # 1. Crea notifica per i camerieri (ordine ricevuto)
+        cursor.execute("""
+            INSERT INTO notifiche (tipo, titolo, messaggio, destinatario_ruolo)
+            VALUES (?, ?, ?, ?)
+        """, (
+            'INFO',
+            f"📋 Nuovo ordine dal Tavolo {tavolo_id}",
+            f"Pre-ordine #{preordine_id} ricevuto - {len(carrello)} piatti da revisionare",
+            'CAMERIERE'
+        ))
+        
+        # 2. Raccogli piatti per reparto per le stampe
+        piatti_per_reparto = {}
+        for item in carrello:
+            # Determina reparto del piatto
+            piatto_info = cursor.execute("""
+                SELECT c.reparto_id 
+                FROM piatti p
+                JOIN categorie c ON p.categoria_id = c.id
+                WHERE p.id = ?
+            """, (item['id'],)).fetchone()
+            
+            if piatto_info:
+                reparto_id = piatto_info[0]
+                
+                if reparto_id not in piatti_per_reparto:
+                    piatti_per_reparto[reparto_id] = []
+                
+                # Prepara note come JSON
+                note_json = json.dumps({
+                    'note': item.get('note', ''),
+                    'variazioni': item.get('variazioni', [])
+                })
+                
+                piatti_per_reparto[reparto_id].append({
+                    'piatto_nome': item['nome'],
+                    'qty': item['qty'],
+                    'note': note_json
+                })
+        
+        conn.close()
+        
+        # 3. Invia stampe ai reparti (se ci sono stampanti configurate)
+        try:
+            from db import StampanteService
+            for reparto_id, piatti in piatti_per_reparto.items():
+                # Crea una comanda temporanea per la stampa
+                StampanteService.stampa_comanda(
+                    comanda_id=preordine_id,  # Usiamo l'ID preordine come riferimento
+                    reparto_id=reparto_id,
+                    piatti=piatti
+                )
+        except Exception as e:
+            print(f"⚠️ Errore stampa: {e}")
+        
+        return True
+    except Exception as e:
+        print(f"❌ Errore notifiche: {e}")
+        return False
 
 # ============================================================================
 # PAGINA CLIENTE PRINCIPALE - VERSIONE MIGLIORATA
@@ -664,7 +773,7 @@ def show_cliente_page():
                     st.session_state.cliente_nota = note
                 
                 # ========================================================================
-                # BOTTONE INVIA ORDINE CON DEBUG
+                # BOTTONE INVIA ORDINE CON NOTIFICHE E STAMPE
                 # ========================================================================
                 st.markdown("---")
                 st.markdown("##### 🔍 DEBUG BOTTONE INVIO")
@@ -683,6 +792,7 @@ def show_cliente_page():
                             for i, item in enumerate(st.session_state.cliente_carrello[:2]):
                                 st.write(f"  {i+1}. {item['qty']}x {item['nome']} - €{item['prezzo']}")
                             
+                            # 1. Salva il pre-ordine nel database
                             preordine_id = salva_preordine_con_verifica(
                                 tavolo_id,
                                 st.session_state.cliente_carrello,
@@ -690,7 +800,20 @@ def show_cliente_page():
                             )
                             
                             if preordine_id:
-                                st.success(f"✅ **SUCCESSO!** Ordine #{preordine_id} inviato!")
+                                st.success(f"✅ **SUCCESSO!** Ordine #{preordine_id} salvato!")
+                                
+                                # 2. Invia notifiche in sala e stampe in cucina
+                                with st.spinner("Invio notifiche e stampe in corso..."):
+                                    if invia_notifiche_e_stampe(
+                                        preordine_id,
+                                        tavolo_id,
+                                        st.session_state.cliente_carrello,
+                                        st.session_state.cliente_nota
+                                    ):
+                                        st.success("✅ Notifiche inviate in sala e stampe in cucina!")
+                                    else:
+                                        st.warning("⚠️ Ordine salvato ma problemi con notifiche/stampe")
+                                
                                 st.balloons()
                                 st.session_state.cliente_carrello = []
                                 st.session_state.cliente_nota = ""
