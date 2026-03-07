@@ -638,6 +638,7 @@ def show_sidebar():
         elif st.session_state.user_role == 'CAMERIERE':
             menu_items = [
                 ("🍽️ SALA", "sala"),
+                ("📋 PROMEMORIA CLIENTI", "promemoria"),  # NUOVO
                 ("📋 PRE-ORDINI", "preordini"),
                 ("📋 NOTIFICHE", "notifiche")
             ]
@@ -2255,6 +2256,275 @@ def show_revisione_preordine():
                     if 'rev_cat_selezionata' in st.session_state:
                         del st.session_state.rev_cat_selezionata
                     st.rerun()
+
+ # ============================================================================
+# FASE 3 - GESTIONE PROMEMORIA CLIENTI CON TEMPI (PER CAMERIERI)
+# ============================================================================
+def mostra_promemoria_clienti():
+    """Visualizza tutti i promemoria dei clienti con i tempi di servizio"""
+    st.title("📋 Promemoria Clienti")
+    
+    # Recupera tutti i pre-ordini in attesa
+    preordini = esegui_query("""
+        SELECT p.*, t.numero as tavolo_numero, s.nome as sala_nome
+        FROM preordini p
+        JOIN tavoli t ON p.tavolo_id = t.id
+        JOIN sale s ON t.sala_id = s.id
+        WHERE p.stato = 'IN_ATTESA'
+        ORDER BY p.timestamp_creazione DESC
+    """, fetchall=True)
+    
+    if not preordini:
+        st.info("📭 Nessun promemoria cliente in attesa")
+        return
+    
+    for pre in preordini:
+        with st.container(border=True):
+            # Header del promemoria
+            col1, col2, col3 = st.columns([2, 1, 1])
+            
+            with col1:
+                st.markdown(f"### 🪑 Tavolo {pre['tavolo_numero']} - {pre['sala_nome']}")
+                if pre['timestamp_creazione']:
+                    data_ora = pre['timestamp_creazione'].strftime('%d/%m/%Y %H:%M') if hasattr(pre['timestamp_creazione'], 'strftime') else str(pre['timestamp_creazione'])[:16]
+                    st.caption(f"🕐 Ricevuto: {data_ora}")
+            
+            with col2:
+                # Recupera dettagli
+                dettagli = esegui_query("""
+                    SELECT * FROM preordini_dettaglio 
+                    WHERE preordine_id = ? 
+                    ORDER BY posizione
+                """, (pre['id'],), fetchall=True)
+                
+                totale = sum(d['qty'] * d['prezzo_unitario'] for d in dettagli) if dettagli else 0
+                st.metric("💰 Totale", format_currency(totale))
+                st.caption(f"📦 {len(dettagli) if dettagli else 0} piatti")
+            
+            with col3:
+                if st.button("👀 VEDI DETTAGLIO", key=f"dettaglio_{pre['id']}"):
+                    st.session_state.promemoria_selezionato = pre['id']
+                    st.session_state.tavolo_promemoria = pre['tavolo_numero']
+                    st.session_state.sala_promemoria = pre['sala_nome']
+                    st.rerun()
+    
+    # Mostra dettaglio se selezionato
+    if 'promemoria_selezionato' in st.session_state:
+        mostra_dettaglio_promemoria()
+
+
+def mostra_dettaglio_promemoria():
+    """Mostra il dettaglio di un promemoria con i tempi di servizio"""
+    
+    if 'promemoria_selezionato' not in st.session_state:
+        return
+    
+    preordine_id = st.session_state.promemoria_selezionato
+    tavolo_numero = st.session_state.tavolo_promemoria
+    sala_nome = st.session_state.sala_promemoria
+    
+    st.divider()
+    st.markdown(f"## 📋 Dettaglio Ordine - Tavolo {tavolo_numero} ({sala_nome})")
+    
+    # Recupera dettagli ordinati per posizione
+    dettagli = esegui_query("""
+        SELECT * FROM preordini_dettaglio 
+        WHERE preordine_id = ? 
+        ORDER BY posizione
+    """, (preordine_id,), fetchall=True)
+    
+    if not dettagli:
+        st.warning("Nessun piatto in questo promemoria")
+        return
+    
+    # Mostra timeline dei tempi
+    st.markdown("### 📊 Timeline di Servizio")
+    
+    cols = st.columns(4)
+    tempi = ["⚡ TEMPO 1", "⏱️ TEMPO 2", "📅 TEMPO 3", "🎂 TEMPO 4"]
+    colori = ["#e74c3c", "#f39c12", "#3498db", "#9b59b6"]
+    
+    for i, (col, tempo, colore) in enumerate(zip(cols, tempi, colori)):
+        with col:
+            piatti_tempo = [d for d in dettagli if d['posizione'] == i]
+            st.markdown(f"""
+                <div style="background-color: {colore}20; padding: 0.5rem; border-radius: 10px; border-left: 5px solid {colore};">
+                    <span style="color: {colore}; font-weight: bold;">{tempo}</span>
+                    <div style="font-size: 1.2rem;">{len(piatti_tempo)} piatti</div>
+                </div>
+            """, unsafe_allow_html=True)
+    
+    st.divider()
+    
+    # Mostra piatti in ordine
+    totale = 0
+    for idx, d in enumerate(dettagli):
+        # Determina colore in base alla posizione
+        if idx == 0:
+            colore_tempo = "#e74c3c"
+            tempo_nome = "⚡ TEMPO 1"
+        elif idx == 1:
+            colore_tempo = "#f39c12"
+            tempo_nome = "⏱️ TEMPO 2"
+        elif idx == 2:
+            colore_tempo = "#3498db"
+            tempo_nome = "📅 TEMPO 3"
+        else:
+            colore_tempo = "#9b59b6"
+            tempo_nome = "🎂 TEMPO 4"
+        
+        with st.container(border=True):
+            col1, col2, col3 = st.columns([3, 1, 1])
+            
+            with col1:
+                st.markdown(f"""
+                    <span style="color: {colore_tempo}; font-weight: bold;">{tempo_nome}</span>
+                """, unsafe_allow_html=True)
+                st.markdown(f"**{d['qty']}x {d['piatto_nome']}**")
+                
+                # Mostra variazioni se presenti
+                if d.get('variazioni') and d['variazioni'] not in ['[]', '{}', '']:
+                    try:
+                        var = json.loads(d['variazioni'])
+                        for v in var:
+                            st.caption(f"  ✦ {v.get('nome', '')} (+{format_currency(v.get('prezzo', 0))})")
+                    except:
+                        pass
+                
+                if d.get('note'):
+                    st.caption(f"📝 {d['note']}")
+            
+            with col2:
+                st.markdown(f"**{format_currency(d['prezzo_unitario'])}**")
+            
+            with col3:
+                st.markdown(f"**{format_currency(d['prezzo_unitario'] * d['qty'])}**")
+            
+            totale += d['prezzo_unitario'] * d['qty']
+    
+    st.markdown(f"### TOTALE: {format_currency(totale)}")
+    
+    st.divider()
+    
+    # Bottoni azione
+    col_back, col_converti = st.columns(2)
+    
+    with col_back:
+        if st.button("⬅️ TORNA ALLA LISTA", use_container_width=True):
+            del st.session_state.promemoria_selezionato
+            del st.session_state.tavolo_promemoria
+            del st.session_state.sala_promemoria
+            st.rerun()
+    
+    with col_converti:
+        if st.button("✅ CONVERTI IN COMANDA", type="primary", use_container_width=True):
+            converti_promemoria_in_comanda(preordine_id, tavolo_numero, dettagli)
+
+
+def converti_promemoria_in_comanda(preordine_id, tavolo_numero, dettagli):
+    """Converte un promemoria in comanda rispettando i tempi"""
+    
+    try:
+        # Recupera il preordine
+        preordine = esegui_query("SELECT * FROM preordini WHERE id = ?", (preordine_id,), fetchone=True)
+        
+        if not preordine:
+            st.error("Promemoria non trovato")
+            return
+        
+        # Occupa il tavolo e crea comanda
+        comanda_id = TavoloService.occupa_tavolo(preordine['tavolo_id'], st.session_state.user_id)
+        
+        # Raccogli piatti per reparto (per stampe)
+        piatti_per_reparto = {}
+        
+        # Inserisci le comandine rispettando l'ordine e i tempi
+        for idx, d in enumerate(dettagli):
+            # Determina tempo in base alla posizione
+            if idx == 0:
+                tempo_codice = "TEMPO1"
+                minuti = 0
+            elif idx == 1:
+                tempo_codice = "TEMPO2"
+                minuti = 10
+            elif idx == 2:
+                tempo_codice = "TEMPO3"
+                minuti = 20
+            else:
+                tempo_codice = "TEMPO4"
+                minuti = 30
+            
+            # Determina reparto
+            piatto_info = esegui_query("""
+                SELECT c.reparto_id 
+                FROM piatti p
+                JOIN categorie c ON p.categoria_id = c.id
+                WHERE p.id = ?
+            """, (d['piatto_id'],), fetchone=True)
+            
+            reparto_id = piatto_info['reparto_id'] if piatto_info else 1
+            
+            # Prepara note
+            note_json = d.get('variazioni', '[]')
+            
+            # Inserisci commandina
+            esegui_query("""
+                INSERT INTO comandine 
+                (comanda_id, piatto_id, piatto_nome, qty, prezzo_unitario, 
+                 note, stato, reparto_id, tempo_consegna, minuti_consegna)
+                VALUES (?, ?, ?, ?, ?, ?, 'NUOVO', ?, ?, ?)
+            """, (
+                comanda_id,
+                d['piatto_id'],
+                d['piatto_nome'],
+                d['qty'],
+                d['prezzo_unitario'],
+                note_json,
+                reparto_id,
+                tempo_codice,
+                minuti
+            ), commit=True)
+            
+            # Raccogli per stampa
+            if reparto_id not in piatti_per_reparto:
+                piatti_per_reparto[reparto_id] = []
+            
+            piatti_per_reparto[reparto_id].append({
+                'piatto_nome': f"{d['piatto_nome']} [{tempo_codice}]",
+                'qty': d['qty'],
+                'note': note_json
+            })
+        
+        # Aggiorna stato preordine
+        esegui_query("""
+            UPDATE preordini 
+            SET stato = 'CONFERMATO', cameriere_id = ?, timestamp_revisione = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (st.session_state.user_id, preordine_id), commit=True)
+        
+        # Stampa automatica
+        try:
+            from db import StampanteService
+            for reparto_id, piatti in piatti_per_reparto.items():
+                StampanteService.stampa_comanda(comanda_id, reparto_id, piatti)
+        except Exception as e:
+            st.warning(f"⚠️ Stampa non disponibile: {e}")
+        
+        st.success(f"✅ Ordine convertito in comanda #{comanda_id}!")
+        st.balloons()
+        
+        # Pulisci sessione
+        del st.session_state.promemoria_selezionato
+        del st.session_state.tavolo_promemoria
+        del st.session_state.sala_promemoria
+        
+        time.sleep(2)
+        st.rerun()
+        
+    except Exception as e:
+        st.error(f"❌ Errore durante la conversione: {e}")
+        import traceback
+        traceback.print_exc()                   
 
 
 def conferma_preordine(preordine_id):
@@ -4897,6 +5167,8 @@ def main():
             show_revisione_preordine()
         else:
             show_preordini()
+    elif pagina == 'promemoria':  # 🔥 NUOVA PAGINA PER I PROMEMORIA CLIENTI
+        mostra_promemoria_clienti()
     elif pagina == 'notifiche':
         show_notifiche()
     elif pagina == 'backup':
