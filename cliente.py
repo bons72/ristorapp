@@ -1,6 +1,6 @@
 """
-PALAZZO FIORINI - Menu Digitale per Clienti
-Versione 3.0 - UI Migliorata e Brandizzata
+PALAZZO FIORINI - Menu Digitale per Clienti (SOLO PROMEMORIA)
+Versione 4.0 - Visualizzazione menu con carrello locale e immagini
 """
 
 import streamlit as st
@@ -8,9 +8,9 @@ import sqlite3
 import os
 import tempfile
 from datetime import datetime
-import time
-import traceback
 import json
+import base64
+from io import BytesIO
 
 # ============================================================================
 # CONFIGURAZIONE DATABASE
@@ -18,139 +18,11 @@ import json
 def get_db_path():
     """Restituisce il percorso del database"""
     if os.environ.get('STREAMLIT_CLOUD'):
-        persistent_dir = os.path.join(os.path.expanduser('~'), '.ristorapp_data')
-        os.makedirs(persistent_dir, exist_ok=True)
-        return os.path.join(persistent_dir, "ristorante.db")
-    elif os.environ.get('DB_PATH'):
-        return os.environ.get('DB_PATH')
+        return os.path.join(tempfile.gettempdir(), "ristorante.db")
     else:
         return "ristorante.db"
 
 DB_PATH = get_db_path()
-
-# ============================================================================
-# CREA DIRETTAMENTE LE TABELLE SE NON ESISTONO
-# ============================================================================
-def crea_tabelle_se_needed():
-    """Crea le tabelle necessarie per il cliente"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Crea tabella categorie
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS categorie (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nome TEXT UNIQUE NOT NULL,
-                reparto_id INTEGER NOT NULL,
-                icona TEXT DEFAULT '🍽️',
-                ordine INTEGER DEFAULT 999,
-                attiva INTEGER DEFAULT 1
-            )
-        """)
-        
-        # Crea tabella piatti
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS piatti (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nome TEXT UNIQUE NOT NULL,
-                categoria_id INTEGER NOT NULL,
-                descrizione_pubblica TEXT,
-                prezzo REAL NOT NULL,
-                disponibile INTEGER DEFAULT 1,
-                foto_data BLOB
-            )
-        """)
-        
-        # Crea tabella variazioni
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS variazioni (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nome TEXT UNIQUE NOT NULL,
-                prezzo REAL DEFAULT 0,
-                reparto_id INTEGER NOT NULL,
-                attivo INTEGER DEFAULT 1
-            )
-        """)
-        
-        # Crea tabella preordini
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS preordini (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tavolo_id INTEGER NOT NULL,
-                stato TEXT DEFAULT 'IN_ATTESA',
-                note TEXT,
-                timestamp_creazione TIMESTAMP
-            )
-        """)
-        
-        # Crea tabella preordini_dettaglio
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS preordini_dettaglio (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                preordine_id INTEGER NOT NULL,
-                piatto_id INTEGER NOT NULL,
-                piatto_nome TEXT NOT NULL,
-                qty INTEGER DEFAULT 1,
-                prezzo_unitario REAL NOT NULL,
-                variazioni TEXT DEFAULT '[]',
-                note TEXT
-            )
-        """)
-        
-        # Inserisci dati di esempio se necessario
-        cursor.execute("SELECT COUNT(*) FROM categorie")
-        if cursor.fetchone()[0] == 0:
-            cursor.execute("INSERT INTO categorie (id, nome, reparto_id, icona, ordine) VALUES (1, 'ANTIPASTI', 1, '🥗', 1)")
-            cursor.execute("INSERT INTO categorie (id, nome, reparto_id, icona, ordine) VALUES (2, 'PRIMI', 1, '🍝', 2)")
-            cursor.execute("INSERT INTO categorie (id, nome, reparto_id, icona, ordine) VALUES (3, 'SECONDI', 1, '🥩', 3)")
-        
-        cursor.execute("SELECT COUNT(*) FROM piatti")
-        if cursor.fetchone()[0] == 0:
-            cursor.execute("INSERT INTO piatti (id, nome, categoria_id, prezzo) VALUES (1, 'Bruschetta', 1, 6.50)")
-            cursor.execute("INSERT INTO piatti (id, nome, categoria_id, prezzo) VALUES (2, 'Spaghetti Carbonara', 2, 12.00)")
-            cursor.execute("INSERT INTO piatti (id, nome, categoria_id, prezzo) VALUES (3, 'Bistecca alla Griglia', 3, 18.00)")
-        
-        conn.commit()
-        conn.close()
-        print("✅ Tabelle create/verificate da cliente.py")
-        return True
-    except Exception as e:
-        print(f"❌ Errore creazione tabelle: {e}")
-        return False
-
-# CHIAMA SUBITO LA FUNZIONE
-crea_tabelle_se_needed()
-
-# ============================================================================
-# ATTENDI CHE IL DATABASE SIA PRONTO
-# ============================================================================
-def attendi_database():
-    """Aspetta che le tabelle necessarie siano create"""
-    max_tentativi = 10
-    tentativo = 0
-    
-    while tentativo < max_tentativi:
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='categorie'")
-            if cursor.fetchone():
-                conn.close()
-                print(f"✅ Database pronto al tentativo {tentativo + 1}")
-                return True
-            conn.close()
-        except:
-            pass
-        
-        tentativo += 1
-        time.sleep(1)  # Aspetta 1 secondo tra tentativi
-    
-    print("❌ Database non pronto dopo 10 tentativi")
-    return False
-
-# Chiama la funzione all'avvio
-attendidb = attendi_database()
 
 # ============================================================================
 # FUNZIONI PER IL BRAND
@@ -162,51 +34,20 @@ def get_brand_info():
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        
-        # Verifica se la tabella brand esiste, altrimenti creala
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS brand (
-                id INTEGER PRIMARY KEY DEFAULT 1,
-                nome TEXT NOT NULL,
-                indirizzo TEXT,
-                telefono TEXT,
-                email TEXT,
-                partita_iva TEXT,
-                logo_data BLOB,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Inserisci record default se non esiste (ORA CON RISTORAPP)
-        cursor.execute("INSERT OR IGNORE INTO brand (id, nome) VALUES (1, 'RISTORAPP')")
-        conn.commit()
-        
         cursor.execute("SELECT * FROM brand WHERE id = 1")
         brand = cursor.fetchone()
         conn.close()
-        
         return dict(brand) if brand else {'nome': 'RISTORAPP', 'logo_data': None}
-    except Exception as e:
-        print(f"Errore get_brand_info: {e}")
+    except:
         return {'nome': 'RISTORAPP', 'logo_data': None}
 
 # ============================================================================
-# FUNZIONI PER IL MENU E ORDINI
+# FUNZIONI PER IL MENU
 # ============================================================================
 @st.cache_data(ttl=60)
 def get_menu_completo():
-    """Recupera il menu completo con piatti e relative variazioni"""
+    """Recupera il menu completo con piatti e immagini"""
     try:
-        # Verifica che le tabelle esistano
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='categorie'")
-        if not cursor.fetchone():
-            print("⚠️ Tabella categorie non ancora pronta")
-            conn.close()
-            return []
-        conn.close()
-        
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -228,6 +69,7 @@ def get_menu_completo():
         """)
         
         results = cursor.fetchall()
+        conn.close()
         
         menu = []
         current_cat = None
@@ -248,290 +90,40 @@ def get_menu_completo():
                 }
             
             if row['piatto_id']:
-                variazioni = get_variazioni_per_piatto(row['piatto_id'])
+                # Converti foto_data in base64 se presente
+                foto_data = row['foto_data']
+                foto_base64 = None
+                if foto_data:
+                    try:
+                        foto_base64 = base64.b64encode(foto_data).decode()
+                    except:
+                        foto_base64 = None
                 
                 current_cat_data['piatti'].append({
                     'id': row['piatto_id'],
                     'nome': row['piatto_nome'],
                     'descrizione': row['descrizione_pubblica'] or '',
                     'prezzo': row['prezzo'],
-                    'foto': row['foto_data'],
-                    'variazioni': variazioni
+                    'foto_base64': foto_base64
                 })
         
         if current_cat_data:
             menu.append(current_cat_data)
         
-        conn.close()
         return menu
     except Exception as e:
-        print(f"❌ Errore in get_menu_completo: {e}")
-        traceback.print_exc()
-        return []
-
-def get_variazioni_per_piatto(piatto_id):
-    """Recupera le variazioni disponibili per un piatto"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT c.reparto_id 
-            FROM piatti p
-            JOIN categorie c ON p.categoria_id = c.id
-            WHERE p.id = ?
-        """, (piatto_id,))
-        
-        reparto = cursor.fetchone()
-        if not reparto:
-            return []
-        
-        cursor.execute("""
-            SELECT * FROM variazioni 
-            WHERE reparto_id = ? AND attivo = 1
-            ORDER BY ordine, nome
-        """, (reparto['reparto_id'],))
-        
-        variazioni = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return variazioni
-    except Exception as e:
-        print(f"❌ Errore in get_variazioni_per_piatto: {e}")
+        print(f"❌ Errore menu: {e}")
         return []
 
 def format_currency(amount):
     """Formatta importo in euro"""
-    return f"€{amount:.2f}"
-
-def calcola_totale_con_variazioni(prezzo_base, qty, variazioni_selezionate):
-    """Calcola il totale includendo le variazioni"""
-    totale = prezzo_base * qty
-    for var in variazioni_selezionate:
-        totale += var['prezzo'] * qty
-    return totale
-
-def get_storico_ordini(tavolo_id):
-    """Recupera lo storico degli ordini per un tavolo"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT p.*, 
-                   COUNT(d.id) as numero_piatti,
-                   SUM(d.qty * d.prezzo_unitario) as totale
-            FROM preordini p
-            LEFT JOIN preordini_dettaglio d ON p.id = d.preordine_id
-            WHERE p.tavolo_id = ?
-            GROUP BY p.id
-            ORDER BY p.timestamp_creazione DESC
-            LIMIT 10
-        """, (tavolo_id,))
-        
-        ordini = []
-        for row in cursor.fetchall():
-            ordine = dict(row)
-            cursor.execute("""
-                SELECT * FROM preordini_dettaglio 
-                WHERE preordine_id = ?
-            """, (row['id'],))
-            dettagli = [dict(d) for d in cursor.fetchall()]
-            
-            for d in dettagli:
-                if d.get('variazioni') and d['variazioni'] != '[]':
-                    try:
-                        d['variazioni_parsed'] = json.loads(d['variazioni'])
-                    except:
-                        d['variazioni_parsed'] = []
-                else:
-                    d['variazioni_parsed'] = []
-            
-            ordine['dettagli'] = dettagli
-            ordini.append(ordine)
-        
-        conn.close()
-        return ordini
-    except Exception as e:
-        print(f"❌ Errore in get_storico_ordini: {e}")
-        traceback.print_exc()
-        return []
-
-def salva_preordine_con_verifica(tavolo_id, carrello, note=""):
-    """Salva pre-ordine con verifica e restituisce l'ID"""
-    conn = None
-    try:
-        # DEBUG PERCORSO DATABASE
-        st.write(f"🔍 **DEBUG PERCORSO DATABASE:** {DB_PATH}")
-        
-        import os
-        if os.path.exists(DB_PATH):
-            st.write(f"✅ File database esiste (dimensione: {os.path.getsize(DB_PATH)} bytes)")
-        else:
-            st.warning(f"⚠️ File database NON esiste! Verrà creato")
-        
-        # DEBUG SU FILE (solo per debugging locale)
-        try:
-            with open('/tmp/cliente_debug.log', 'a') as f:
-                f.write(f"\n[{datetime.now()}] 🚀 FUNZIONE CHIAMATA - Tavolo: {tavolo_id}, Carrello: {len(carrello)} piatti\n")
-                f.write(f"   Note: {note}\n")
-                f.write(f"   DB_PATH: {DB_PATH}\n")
-        except:
-            pass
-        
-        st.write("🔍 **DEBUG:** Connessione al database...")
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        st.write("✅ Connessione OK")
-        
-        # VERIFICA TABELLE
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tabelle = cursor.fetchall()
-        st.write(f"📋 Tabelle trovate: {[t[0] for t in tabelle]}")
-        
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        
-        st.write("📝 Inserimento in preordini...")
-        cursor.execute("""
-            INSERT INTO preordini (tavolo_id, stato, note, timestamp_creazione)
-            VALUES (?, 'IN_ATTESA', ?, ?)
-        """, (tavolo_id, note, timestamp))
-        
-        preordine_id = cursor.lastrowid
-        st.write(f"✅ Pre-ordine creato ID: {preordine_id}")
-        
-        for idx, item in enumerate(carrello):
-            # Serializza le variazioni in JSON
-            variazioni_json = json.dumps(item.get('variazioni', []))
-            
-            # ⚠️ CORREZIONE: usa prezzo_base per prezzo_unitario
-            prezzo_base = item.get('prezzo_base', item.get('prezzo', 0))
-            
-            cursor.execute("""
-                INSERT INTO preordini_dettaglio 
-                (preordine_id, piatto_id, piatto_nome, qty, prezzo_unitario, variazioni, note)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                preordine_id,
-                item['id'],
-                item['nome'],
-                item['qty'],
-                prezzo_base,  # ✅ Ora usa il prezzo base corretto
-                variazioni_json,
-                item.get('note', '')
-            ))
-            st.write(f"   ➕ Inserito piatto {idx+1}: {item['qty']}x {item['nome']} (prezzo base: {prezzo_base})")
-        
-        st.write("💾 Commit delle modifiche...")
-        conn.commit()
-        st.write("✅ Commit completato!")
-        
-        # VERIFICA FINALE
-        cursor.execute("SELECT COUNT(*) FROM preordini WHERE id = ?", (preordine_id,))
-        if cursor.fetchone()[0] > 0:
-            st.success(f"✅ Verifica: ordine #{preordine_id} presente nel database!")
-        else:
-            st.error(f"❌ ERRORE: ordine #{preordine_id} NON trovato dopo il commit!")
-        
-        return preordine_id
-        
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        errore = str(e)
-        st.error(f"❌ **ERRORE DATABASE:** {errore}")
-        st.code(traceback.format_exc())
-        
-        # Prova a scrivere l'errore su file
-        try:
-            with open('/tmp/cliente_debug.log', 'a') as f:
-                f.write(f"   ❌ ERRORE: {e}\n")
-                f.write(f"{traceback.format_exc()}\n")
-        except:
-            pass
-        
-        print(f"❌ ERRORE: {e}")
-        traceback.print_exc()
-        return None
-    finally:
-        if conn:
-            conn.close()
+    return f"€ {amount:.2f}"
 
 # ============================================================================
-# NOTIFICHE E STAMPA
-# ============================================================================
-def invia_notifiche_e_stampe(preordine_id, tavolo_id, carrello, note):
-    """Invia notifiche in sala e comande in cucina"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # 1. Crea notifica per i camerieri (ordine ricevuto)
-        cursor.execute("""
-            INSERT INTO notifiche (tipo, titolo, messaggio, destinatario_ruolo)
-            VALUES (?, ?, ?, ?)
-        """, (
-            'INFO',
-            f"📋 Nuovo ordine dal Tavolo {tavolo_id}",
-            f"Pre-ordine #{preordine_id} ricevuto - {len(carrello)} piatti da revisionare",
-            'CAMERIERE'
-        ))
-        
-        # 2. Raccogli piatti per reparto per le stampe
-        piatti_per_reparto = {}
-        for item in carrello:
-            # Determina reparto del piatto
-            piatto_info = cursor.execute("""
-                SELECT c.reparto_id 
-                FROM piatti p
-                JOIN categorie c ON p.categoria_id = c.id
-                WHERE p.id = ?
-            """, (item['id'],)).fetchone()
-            
-            if piatto_info:
-                reparto_id = piatto_info[0]
-                
-                if reparto_id not in piatti_per_reparto:
-                    piatti_per_reparto[reparto_id] = []
-                
-                # Prepara note come JSON
-                note_json = json.dumps({
-                    'note': item.get('note', ''),
-                    'variazioni': item.get('variazioni', [])
-                })
-                
-                piatti_per_reparto[reparto_id].append({
-                    'piatto_nome': item['nome'],
-                    'qty': item['qty'],
-                    'note': note_json
-                })
-        
-        conn.close()
-        
-        # 3. Invia stampe ai reparti (se ci sono stampanti configurate)
-        try:
-            from db import StampanteService
-            for reparto_id, piatti in piatti_per_reparto.items():
-                # Crea una comanda temporanea per la stampa
-                StampanteService.stampa_comanda(
-                    comanda_id=preordine_id,  # Usiamo l'ID preordine come riferimento
-                    reparto_id=reparto_id,
-                    piatti=piatti
-                )
-        except Exception as e:
-            print(f"⚠️ Errore stampa: {e}")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Errore notifiche: {e}")
-        return False
-
-# ============================================================================
-# PAGINA CLIENTE PRINCIPALE - VERSIONE MIGLIORATA
+# PAGINA CLIENTE PRINCIPALE
 # ============================================================================
 def show_cliente_page():
-    """Pagina cliente con UI migliorata e brandizzazione"""
+    """Pagina cliente con menu digitale, immagini e carrello promemoria"""
     
     # ========================================================================
     # OTTIENI TAVOLO
@@ -540,24 +132,16 @@ def show_cliente_page():
     if isinstance(tavolo_id, list):
         tavolo_id = tavolo_id[0] if tavolo_id else None
     
-    # DEBUG TAVOLO
-    st.write(f"🔍 **DEBUG PARAMETRI URL:**")
-    st.write(f"   - tavolo_id grezzo: {tavolo_id}")
-    st.write(f"   - Tutti i parametri: {dict(st.query_params)}")
-    
     if not tavolo_id:
-        st.error("❌ QR Code non valido - parametro 'tavolo' mancante")
+        st.error("❌ QR Code non valido")
         st.info("Contatta il personale")
         return
     
     try:
         tavolo_id = int(tavolo_id)
-        st.write(f"   ✅ Tavolo ID convertito: {tavolo_id}")
     except:
-        st.error(f"❌ Tavolo non valido: '{tavolo_id}' non è un numero")
+        st.error("❌ Tavolo non valido")
         return
-    
-    # ... resto della funzione ...
     
     # ========================================================================
     # RECUPERA INFO BRAND
@@ -567,138 +151,195 @@ def show_cliente_page():
     logo_data = brand.get('logo_data')
     
     # ========================================================================
-    # CSS PERSONALIZZATO PER UI MIGLIORATA
+    # CSS PERSONALIZZATO CON CARATTERI GRANDI
     # ========================================================================
     st.markdown("""
         <style>
-            /* Header compatto */
+            /* Font base più grande */
+            html, body, [class*="css"]  {
+                font-size: 18px !important;
+            }
+            
+            /* Header compatto ma leggibile */
             .compact-header {
                 background: linear-gradient(135deg, #d35400 0%, #e67e22 100%);
-                padding: 0.8rem 1rem;
-                border-radius: 0 0 15px 15px;
-                margin-bottom: 1.5rem;
+                padding: 1.2rem 1.5rem;
+                border-radius: 0 0 20px 20px;
+                margin-bottom: 2rem;
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
                 color: white;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
             }
             .header-logo {
                 display: flex;
                 align-items: center;
-                gap: 10px;
+                gap: 15px;
             }
             .header-logo img {
-                height: 40px;
+                height: 60px;
                 width: auto;
-                border-radius: 5px;
+                border-radius: 8px;
             }
             .header-logo h2 {
                 margin: 0;
-                font-size: 1.4rem;
-                font-weight: 600;
+                font-size: 2.2rem !important;
+                font-weight: 700;
+                color: white;
             }
             .header-tavolo {
-                background: rgba(255,255,255,0.2);
-                padding: 0.3rem 1rem;
-                border-radius: 30px;
-                font-size: 1rem;
-                font-weight: 500;
-            }
-            
-            /* Categorie - Più grandi */
-            .stTabs [data-baseweb="tab"] {
-                font-size: 1.2rem !important;
-                font-weight: 600 !important;
-                padding: 0.8rem !important;
-            }
-            
-            /* Card piatti - Più leggibili */
-            .piatto-card {
-                border: 1px solid #e0e0e0;
-                border-radius: 12px;
-                padding: 1rem;
-                margin-bottom: 1rem;
-                background: white;
-                box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-            }
-            .piatto-nome {
-                font-size: 1.2rem;
+                background: rgba(255,255,255,0.25);
+                padding: 0.6rem 2rem;
+                border-radius: 50px;
+                font-size: 1.8rem !important;
                 font-weight: 600;
-                margin-bottom: 0.3rem;
-            }
-            .piatto-descrizione {
-                font-size: 0.9rem;
-                color: #666;
-                margin-bottom: 0.5rem;
-            }
-            .piatto-prezzo {
-                font-size: 1.3rem;
-                font-weight: 700;
-                color: #d35400;
-            }
-            
-            /* Pulsanti più grandi */
-            .stButton > button {
-                font-size: 1.1rem !important;
-                padding: 0.6rem 1rem !important;
-                border-radius: 8px !important;
-            }
-            
-            /* Quantità più leggibile */
-            .stNumberInput input {
-                font-size: 1.2rem !important;
-                padding: 0.6rem !important;
-            }
-            
-            /* Carrello più compatto */
-            .carrello-item {
-                border-left: 3px solid #d35400;
-                padding-left: 0.8rem;
-                margin-bottom: 0.8rem;
-            }
-            .carrello-totale {
-                font-size: 1.4rem;
-                font-weight: 700;
-                color: #d35400;
-                text-align: right;
-                margin-top: 1rem;
-            }
-            
-            /* Variazioni */
-            .variazione-checkbox {
-                font-size: 0.95rem !important;
+                border: 2px solid rgba(255,255,255,0.5);
             }
             
             /* Tabs più grandi */
             .stTabs [data-baseweb="tab-list"] {
                 gap: 2rem;
+                margin-bottom: 2rem;
             }
             .stTabs [data-baseweb="tab"] {
-                font-size: 1.1rem !important;
-                padding: 0.5rem 1rem !important;
+                font-size: 1.5rem !important;
+                font-weight: 600 !important;
+                padding: 0.8rem 1.5rem !important;
+                background-color: #f8f9fa;
+                border-radius: 50px !important;
+                margin-right: 1rem;
+            }
+            .stTabs [aria-selected="true"] {
+                background-color: #d35400 !important;
+                color: white !important;
             }
             
-            /* DEBUG - evidenzia i messaggi di debug */
-            .debug-message {
-                background-color: #fff3cd;
-                border-left: 5px solid #ffc107;
-                padding: 10px;
-                margin: 10px 0;
-                font-family: monospace;
+            /* Card piatti - formato grande */
+            .piatto-card {
+                border: 2px solid #e0e0e0;
+                border-radius: 20px;
+                padding: 1.5rem;
+                margin-bottom: 1.8rem;
+                background: white;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+                transition: transform 0.2s;
+            }
+            .piatto-card:hover {
+                transform: scale(1.02);
+                box-shadow: 0 6px 16px rgba(0,0,0,0.15);
+            }
+            .piatto-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 1rem;
+            }
+            .piatto-nome {
+                font-size: 1.8rem !important;
+                font-weight: 700;
+                color: #2c3e50;
+            }
+            .piatto-prezzo {
+                font-size: 2rem !important;
+                font-weight: 800;
+                color: #d35400;
+                background: #fff3e0;
+                padding: 0.3rem 1rem;
+                border-radius: 50px;
+            }
+            .piatto-descrizione {
+                font-size: 1.2rem !important;
+                color: #555;
+                margin-bottom: 1.2rem;
+                line-height: 1.5;
+            }
+            .piatto-immagine {
+                margin: 1rem 0;
+                text-align: center;
+            }
+            .piatto-immagine img {
+                max-width: 100%;
+                max-height: 250px;
+                border-radius: 15px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            }
+            
+            /* Pulsanti più grandi */
+            .stButton > button {
+                font-size: 1.4rem !important;
+                font-weight: 600 !important;
+                padding: 0.8rem 1.5rem !important;
+                border-radius: 50px !important;
+                background-color: #d35400 !important;
+                color: white !important;
+                border: none !important;
+            }
+            .stButton > button:hover {
+                background-color: #e67e22 !important;
+            }
+            
+            /* Quantità input più grande */
+            .stNumberInput input {
+                font-size: 1.4rem !important;
+                padding: 0.8rem !important;
+                border-radius: 50px !important;
+                border: 2px solid #ddd !important;
+            }
+            
+            /* Carrello promemoria */
+            .promemoria-container {
+                background-color: #f8f9fa;
+                padding: 1.5rem;
+                border-radius: 20px;
+                border-left: 8px solid #d35400;
+                margin-top: 2rem;
+            }
+            .promemoria-title {
+                font-size: 2rem !important;
+                font-weight: 700;
+                color: #2c3e50;
+                margin-bottom: 1.5rem;
+            }
+            .promemoria-item {
+                font-size: 1.3rem !important;
+                padding: 1rem;
+                background: white;
+                border-radius: 15px;
+                margin-bottom: 1rem;
+                border-left: 5px solid #d35400;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            }
+            .promemoria-totale {
+                font-size: 1.8rem !important;
+                font-weight: 700;
+                color: #d35400;
+                text-align: right;
+                margin-top: 1.5rem;
+                padding-top: 1rem;
+                border-top: 3px dashed #d35400;
+            }
+            
+            /* Messaggi di avviso */
+            .stAlert {
+                font-size: 1.3rem !important;
+                padding: 1rem !important;
+                border-radius: 15px !important;
             }
         </style>
     """, unsafe_allow_html=True)
     
     # ========================================================================
-    # HEADER COMPATTO CON LOGO
+    # HEADER CON LOGO E TAVOLO
     # ========================================================================
     header_html = '<div class="compact-header"><div class="header-logo">'
     
     if logo_data:
-        import base64
-        encoded = base64.b64encode(logo_data).decode()
-        header_html += f'<img src="data:image/png;base64,{encoded}" alt="Logo">'
+        try:
+            encoded = base64.b64encode(logo_data).decode()
+            header_html += f'<img src="data:image/png;base64,{encoded}" alt="Logo">'
+        except:
+            pass
     
     header_html += f'<h2>{ristorante_nome}</h2></div>'
     header_html += f'<div class="header-tavolo">Tavolo {tavolo_id}</div></div>'
@@ -706,320 +347,176 @@ def show_cliente_page():
     st.markdown(header_html, unsafe_allow_html=True)
     
     # ========================================================================
-    # DEBUG VISIBILE IN ALTO
+    # MESSAGGIO INFORMATIVO
     # ========================================================================
-    with st.expander("🔍 DEBUG INFORMAZIONI", expanded=True):
-        st.markdown('<div class="debug-message">', unsafe_allow_html=True)
-        st.write(f"📦 **Database path:** {DB_PATH}")
-        st.write(f"🪑 **Tavolo ID:** {tavolo_id}")
-        st.write(f"🛒 **Carrello in sessione:** {len(st.session_state.get('cliente_carrello', []))} piatti")
-        
-        # Test connessione database
-        try:
-            conn_test = sqlite3.connect(DB_PATH)
-            cursor_test = conn_test.cursor()
-            cursor_test.execute("SELECT COUNT(*) FROM preordini")
-            count = cursor_test.fetchone()[0]
-            st.write(f"📊 **Record in preordini:** {count}")
-            conn_test.close()
-            st.success("✅ Connessione database OK")
-        except Exception as e:
-            st.error(f"❌ Errore database: {e}")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+    st.info("""
+        📋 **MENU DIGITALE** - Usa questa pagina come promemoria per il tuo ordine.
+        Seleziona i piatti che desideri e mostra la lista al cameriere.
+    """)
     
     # ========================================================================
-    # TABS: NUOVO ORDINE | STORICO
+    # INIZIALIZZA CARRELLO PROMEMORIA
     # ========================================================================
-    tab_nuovo, tab_storico = st.tabs(["📝 NUOVO ORDINE", "📜 I MIEI ORDINI"])
+    if 'promemoria' not in st.session_state:
+        st.session_state.promemoria = []
     
     # ========================================================================
-    # TAB 1: NUOVO ORDINE
+    # CARICA MENU
     # ========================================================================
-    with tab_nuovo:
-        # Inizializza carrello
-        if 'cliente_carrello' not in st.session_state:
-            st.session_state.cliente_carrello = []
-        if 'cliente_nota' not in st.session_state:
-            st.session_state.cliente_nota = ""
+    menu = get_menu_completo()
+    
+    if not menu:
+        st.error("❌ Menu non disponibile al momento. Riprova più tardi.")
+        return
+    
+    # ========================================================================
+    # LAYOUT PRINCIPALE
+    # ========================================================================
+    col_menu, col_promemoria = st.columns([2, 1])
+    
+    with col_menu:
+        # Crea tabs per le categorie
+        categorie = [cat['nome'] for cat in menu]
+        icone = [cat['icona'] for cat in menu]
         
-        # Layout a due colonne (menu 60% - carrello 40%)
-        col_menu, col_carrello = st.columns([0.6, 0.4])
+        tabs = st.tabs([f"{icona} {nome}" for icona, nome in zip(icone, categorie)])
         
-        with col_menu:
-            menu = get_menu_completo()
-            
-            if not menu:
-                st.warning("Menu non disponibile")
-                return
-            
-            # Categorie con icone grandi
-            categorie = [cat['nome'] for cat in menu]
-            icone = [cat['icona'] for cat in menu]
-            
-            tabs = st.tabs([f"{icona} {nome}" for icona, nome in zip(icone, categorie)])
-            
-            for idx, (tab, categoria) in enumerate(zip(tabs, menu)):
-                with tab:
-                    if not categoria['piatti']:
-                        st.info("Nessun piatto disponibile")
-                        continue
-                    
-                    for piatto in categoria['piatti']:
-                        with st.container():
-                            # Card piatto
-                            st.markdown(f"""
-                                <div class="piatto-card">
-                                    <div style="display: flex; justify-content: space-between; align-items: start;">
-                                        <div style="flex: 1;">
-                                            <div class="piatto-nome">{piatto['nome']}</div>
-                                            <div class="piatto-descrizione">{piatto['descrizione']}</div>
-                                        </div>
-                                        <div class="piatto-prezzo">{format_currency(piatto['prezzo'])}</div>
-                                    </div>
-                                </div>
-                            """, unsafe_allow_html=True)
-                            
-                            # Variazioni
-                            variazioni_selezionate = []
-                            if piatto.get('variazioni') and len(piatto['variazioni']) > 0:
-                                with st.expander("✨ Personalizza"):
-                                    cols = st.columns(2)
-                                    for i, var in enumerate(piatto['variazioni']):
-                                        with cols[i % 2]:
-                                            if st.checkbox(
-                                                f"{var['nome']} (+{format_currency(var['prezzo'])})",
-                                                key=f"var_{piatto['id']}_{var['id']}_{idx}",
-                                                help=f"Aggiungi {var['nome']} al piatto"
-                                            ):
-                                                variazioni_selezionate.append(var)
-                            
-                            # Quantità e pulsante aggiungi con DEBUG
-                            col_qty, col_btn = st.columns([1, 2])
-                            with col_qty:
-                                qty = st.number_input(
-                                    "Quantità",
-                                    min_value=0,
-                                    max_value=10,
-                                    value=0,
-                                    step=1,
-                                    key=f"qty_{piatto['id']}_{idx}",
-                                    label_visibility="collapsed"
-                                )
-                            
-                            with col_btn:
-                                # DEBUG visibile per questo piatto
-                                st.caption(f"🔍 qty={qty}")
-                                
-                                if st.button("➕ AGGIUNGI", key=f"add_{piatto['id']}_{idx}", use_container_width=True):
-                                    st.write(f"✅ **BOTTONE PREMUTO per {piatto['nome']}**")
-                                    st.write(f"   Quantità selezionata: {qty}")
-                                    st.write(f"   Variazioni selezionate: {len(variazioni_selezionate)}")
-                                    
-                                    if qty > 0:
-                                        prezzo_totale = piatto['prezzo']
-                                        for v in variazioni_selezionate:
-                                            prezzo_totale += v['prezzo']
-                                        
-                                        nuovo_item = {
-                                            'id': piatto['id'],
-                                            'nome': piatto['nome'],
-                                            'prezzo_base': piatto['prezzo'],
-                                            'prezzo': prezzo_totale,
-                                            'qty': qty,
-                                            'variazioni': variazioni_selezionate,
-                                            'note': ''
-                                        }
-                                        
-                                        st.write(f"   ➕ Nuovo item: {nuovo_item}")
-                                        st.write(f"   Carrello prima: {len(st.session_state.cliente_carrello)} elementi")
-                                        
-                                        st.session_state.cliente_carrello.append(nuovo_item)
-                                        
-                                        st.write(f"   Carrello dopo: {len(st.session_state.cliente_carrello)} elementi")
-                                        st.success(f"✅ {qty}x {piatto['nome']} aggiunto!")
-                                        st.rerun()
-                                    else:
-                                        st.warning("Seleziona una quantità maggiore di 0")
-        
-        with col_carrello:
-            st.markdown("### 🛒 IL TUO ORDINE")
-            
-            if not st.session_state.cliente_carrello:
-                st.info("👆 Tocca i piatti per iniziare")
-                st.caption("🔍 DEBUG: carrello vuoto")
-            else:
-                st.caption(f"🔍 DEBUG: {len(st.session_state.cliente_carrello)} elementi nel carrello")
+        for idx, (tab, categoria) in enumerate(zip(tabs, menu)):
+            with tab:
+                if not categoria['piatti']:
+                    st.info("Nessun piatto disponibile in questa categoria")
+                    continue
                 
-                # Raggruppa piatti
-                riassunto = {}
-                for item in st.session_state.cliente_carrello:
-                    var_key = "_".join([str(v['id']) for v in item.get('variazioni', [])]) or "base"
-                    key = f"{item['id']}_{var_key}"
-                    
-                    if key not in riassunto:
-                        riassunto[key] = item.copy()
-                    else:
-                        riassunto[key]['qty'] += item['qty']
-                
-                totale = 0
-                for key, item in riassunto.items():
+                for piatto in categoria['piatti']:
+                    # Card piatto
                     st.markdown(f"""
-                        <div class="carrello-item">
-                            <div style="display: flex; justify-content: space-between;">
-                                <div><strong>{item['qty']}x {item['nome']}</strong></div>
-                                <div>{format_currency(item['prezzo'] * item['qty'])}</div>
+                        <div class="piatto-card">
+                            <div class="piatto-header">
+                                <span class="piatto-nome">{piatto['nome']}</span>
+                                <span class="piatto-prezzo">{format_currency(piatto['prezzo'])}</span>
                             </div>
+                            <div class="piatto-descrizione">{piatto['descrizione']}</div>
+                        </div>
                     """, unsafe_allow_html=True)
                     
-                    if item.get('variazioni'):
-                        for v in item['variazioni']:
-                            st.markdown(f"<div style='font-size:0.85rem; color:#666; margin-left:1rem;'>✦ {v['nome']} (+{format_currency(v['prezzo'])})</div>", unsafe_allow_html=True)
+                    # Immagine del piatto (se disponibile)
+                    if piatto.get('foto_base64'):
+                        st.markdown(f"""
+                            <div class="piatto-immagine">
+                                <img src="data:image/png;base64,{piatto['foto_base64']}" alt="{piatto['nome']}">
+                            </div>
+                        """, unsafe_allow_html=True)
                     
-                    if st.button("🗑️", key=f"del_{key}"):
-                        nuovi = []
-                        for i in st.session_state.cliente_carrello:
-                            var_key_i = "_".join([str(v['id']) for v in i.get('variazioni', [])]) or "base"
-                            key_i = f"{i['id']}_{var_key_i}"
-                            if key_i != key:
-                                nuovi.append(i)
-                        st.session_state.cliente_carrello = nuovi
-                        st.rerun()
+                    # Quantità e pulsante aggiungi
+                    col_qty, col_btn = st.columns([1, 2])
+                    with col_qty:
+                        qty = st.number_input(
+                            "Qtà",
+                            min_value=0,
+                            max_value=10,
+                            value=0,
+                            step=1,
+                            key=f"qty_{piatto['id']}_{idx}",
+                            label_visibility="collapsed"
+                        )
                     
-                    st.markdown("</div>", unsafe_allow_html=True)
-                    
-                    importo = calcola_totale_con_variazioni(
-                        item['prezzo_base'], 
-                        item['qty'], 
-                        item.get('variazioni', [])
-                    )
-                    totale += importo
-                
-                st.markdown(f"<div class='carrello-totale'>TOTALE: {format_currency(totale)}</div>", unsafe_allow_html=True)
-                
-                with st.expander("📝 Note"):
-                    note = st.text_area(
-                        "Allergie, preferenze...",
-                        value=st.session_state.cliente_nota,
-                        key="note_input",
-                        placeholder="Es. Senza glutine, ben cotto...",
-                        height=80
-                    )
-                    st.session_state.cliente_nota = note
-                
-                # ========================================================================
-                # BOTTONE INVIA ORDINE CON DEBUG SU FILE
-                # ========================================================================
-                st.markdown("---")
-                st.markdown("##### 🔍 DEBUG BOTTONE INVIO")
-                
-                # Scrivi su file all'avvio della pagina (solo per debug)
-                with open('/tmp/cliente_click.log', 'a') as f:
-                    f.write(f"\n[{datetime.now()}] PAGINA CARICATA - Tavolo: {tavolo_id}, Carrello: {len(st.session_state.cliente_carrello)}\n")
-                
-                st.write(f"Carrello ha **{len(st.session_state.cliente_carrello)}** elementi")
-                
-                if st.button("📨 INVIA ORDINE (DEBUG)", type="primary", use_container_width=True):
-                    # Scrivi su file quando il bottone viene premuto
-                    with open('/tmp/cliente_click.log', 'a') as f:
-                        f.write(f"\n[{datetime.now()}] ✅ BOTTONE PREMUTO!\n")
-                        f.write(f"   Tavolo: {tavolo_id}\n")
-                        f.write(f"   Note: {st.session_state.cliente_nota}\n")
-                        f.write(f"   Carrello: {len(st.session_state.cliente_carrello)} piatti\n")
-                    
-                    st.write("✅ **BOTTONE INVIO PREMUTO!** (controlla /tmp/cliente_click.log)")
-                    st.write(f"Tavolo: {tavolo_id}")
-                    st.write(f"Note: {st.session_state.cliente_nota}")
-                    st.write(f"Carrello: {len(st.session_state.cliente_carrello)} piatti")
-                    
-                    if st.session_state.cliente_carrello:
-                        with st.spinner("Invio in corso... (controlla i log)"):
-                            # Mostra i primi 2 piatti per debug
-                            st.write("**Primi 2 piatti del carrello:**")
-                            for i, item in enumerate(st.session_state.cliente_carrello[:2]):
-                                st.write(f"  {i+1}. {item['qty']}x {item['nome']} - €{item['prezzo']}")
-                            
-                            # 1. Salva il pre-ordine nel database
-                            preordine_id = salva_preordine_con_verifica(
-                                tavolo_id,
-                                st.session_state.cliente_carrello,
-                                st.session_state.cliente_nota
-                            )
-                            
-                            if preordine_id:
-                                st.success(f"✅ **SUCCESSO!** Ordine #{preordine_id} salvato!")
-                                
-                                # 2. Invia notifiche in sala e stampe in cucina
-                                with st.spinner("Invio notifiche e stampe in corso..."):
-                                    if invia_notifiche_e_stampe(
-                                        preordine_id,
-                                        tavolo_id,
-                                        st.session_state.cliente_carrello,
-                                        st.session_state.cliente_nota
-                                    ):
-                                        st.success("✅ Notifiche inviate in sala e stampe in cucina!")
-                                    else:
-                                        st.warning("⚠️ Ordine salvato ma problemi con notifiche/stampe")
-                                
-                                st.balloons()
-                                st.session_state.cliente_carrello = []
-                                st.session_state.cliente_nota = ""
-                                time.sleep(3)
+                    with col_btn:
+                        if st.button("➕ AGGIUNGI AL PROMEMORIA", key=f"add_{piatto['id']}_{idx}", use_container_width=True):
+                            if qty > 0:
+                                # Aggiungi al promemoria
+                                nuovo_item = {
+                                    'id': piatto['id'],
+                                    'nome': piatto['nome'],
+                                    'prezzo': piatto['prezzo'],
+                                    'qty': qty,
+                                    'note': ''
+                                }
+                                st.session_state.promemoria.append(nuovo_item)
+                                st.success(f"✅ {qty}x {piatto['nome']} aggiunto al promemoria!")
                                 st.rerun()
                             else:
-                                st.error("❌ **ERRORE** nell'invio. Controlla i log.")
-                                st.info("Guarda i log su Streamlit Cloud (Manage app → Logs)")
-                    else:
-                        st.warning("Il carrello è vuoto")
+                                st.warning("Seleziona una quantità maggiore di 0")
+    
+    with col_promemoria:
+        st.markdown('<div class="promemoria-title">📋 IL MIO PROMEMORIA</div>', unsafe_allow_html=True)
+        
+        if not st.session_state.promemoria:
+            st.info("👆 Tocca i piatti per aggiungerli al promemoria")
+        else:
+            # Raggruppa piatti
+            riassunto = {}
+            for item in st.session_state.promemoria:
+                key = f"{item['id']}"
+                if key not in riassunto:
+                    riassunto[key] = item.copy()
+                else:
+                    riassunto[key]['qty'] += item['qty']
+            
+            totale = 0
+            for key, item in riassunto.items():
+                st.markdown(f"""
+                    <div class="promemoria-item">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong style="font-size: 1.5rem;">{item['qty']}x {item['nome']}</strong>
+                            </div>
+                            <div style="font-size: 1.4rem; font-weight: 600; color: #d35400;">
+                                {format_currency(item['prezzo'] * item['qty'])}
+                            </div>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Bottone elimina (più piccolo)
+                col1, col2, col3 = st.columns([3, 1, 1])
+                with col3:
+                    if st.button("🗑️", key=f"del_{key}"):
+                        nuovi = []
+                        for i in st.session_state.promemoria:
+                            if str(i['id']) != key:
+                                nuovi.append(i)
+                        st.session_state.promemoria = nuovi
+                        st.rerun()
+                
+                totale += item['prezzo'] * item['qty']
+            
+            st.markdown(f'<div class="promemoria-totale">TOTALE: {format_currency(totale)}</div>', unsafe_allow_html=True)
+            
+            # Note opzionali
+            with st.expander("📝 Aggiungi note (opzionale)"):
+                note = st.text_area(
+                    "Allergie, preferenze...",
+                    placeholder="Es. Senza glutine, ben cotto...",
+                    height=100
+                )
+                if note:
+                    st.caption(f"📌 Nota salvata: {note}")
+            
+            # Pulsanti azione
+            col_svuota, col_cameriere = st.columns(2)
+            
+            with col_svuota:
+                if st.button("🗑️ SVUOTA", use_container_width=True):
+                    st.session_state.promemoria = []
+                    st.rerun()
+            
+            with col_cameriere:
+                if st.button("👨‍🍳 CHIAMA CAMERIERE", type="primary", use_container_width=True):
+                    st.balloons()
+                    st.success("""
+                        ✅ Il cameriere è stato chiamato!
+                        
+                        Mostragli il promemoria con la lista dei piatti.
+                    """)
     
     # ========================================================================
-    # TAB 2: STORICO ORDINI
+    # ISTRUZIONI FINALI
     # ========================================================================
-    with tab_storico:
-        st.markdown("### 📜 I TUOI ORDINI")
-        
-        ordini = get_storico_ordini(tavolo_id)
-        
-        if not ordini:
-            st.info("Non hai ancora effettuato ordini")
-        else:
-            for ordine in ordini:
-                if ordine['timestamp_creazione']:
-                    if hasattr(ordine['timestamp_creazione'], 'strftime'):
-                        data_ora = ordine['timestamp_creazione'].strftime('%d/%m/%Y %H:%M')
-                    else:
-                        data_ora = str(ordine['timestamp_creazione'])[:16]
-                else:
-                    data_ora = 'N/A'
-                
-                stato_emoji = {
-                    'IN_ATTESA': '⏳',
-                    'REVISIONATO': '👀',
-                    'CONFERMATO': '✅',
-                    'ANNULLATO': '❌'
-                }.get(ordine['stato'], '📋')
-                
-                with st.expander(f"{stato_emoji} Ordine del {data_ora}"):
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.write(f"**Stato:** {ordine['stato']}")
-                        st.write(f"**Piatti:** {ordine['numero_piatti']}")
-                    
-                    with col2:
-                        st.write(f"**Totale:** {format_currency(ordine['totale'])}")
-                    
-                    st.markdown("##### Dettaglio:")
-                    for d in ordine['dettagli']:
-                        prezzo_totale = d['qty'] * d['prezzo_unitario']
-                        st.markdown(f"• {d['qty']}x **{d['piatto_nome']}** - {format_currency(prezzo_totale)}")
-                        
-                        if d.get('variazioni_parsed'):
-                            for v in d['variazioni_parsed']:
-                                st.caption(f"  ✦ {v.get('nome', '')} (+{format_currency(v.get('prezzo', 0))})")
-                        
-                        if d.get('note'):
-                            st.caption(f"  📝 {d['note']}")
-                    
-                    if ordine.get('note'):
-                        st.info(f"📝 Note: {ordine['note']}")
+    st.markdown("---")
+    st.markdown("""
+        <div style="text-align: center; padding: 1rem; background: #f8f9fa; border-radius: 15px;">
+            <p style="font-size: 1.3rem; margin: 0;">
+                📌 Mostra questa lista al cameriere per comunicare il tuo ordine
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
