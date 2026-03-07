@@ -1,6 +1,6 @@
 """
-PALAZZO FIORINI - Menu Digitale per Clienti (SOLO PROMEMORIA)
-Versione 4.0 - Visualizzazione menu con carrello locale e immagini
+PALAZZO FIORINI - Menu Digitale per Clienti (SOLO CONSULTAZIONE)
+Versione 5.0 - Solo visualizzazione menu e promemoria personale
 """
 
 import streamlit as st
@@ -10,7 +10,6 @@ import tempfile
 from datetime import datetime
 import json
 import base64
-from io import BytesIO
 
 # ============================================================================
 # CONFIGURAZIONE DATABASE
@@ -123,7 +122,7 @@ def format_currency(amount):
 # PAGINA CLIENTE PRINCIPALE
 # ============================================================================
 def show_cliente_page():
-    """Pagina cliente con menu digitale, immagini e carrello promemoria"""
+    """Pagina cliente con menu digitale e carrello promemoria (SOLO VISUALIZZAZIONE)"""
     
     # ========================================================================
     # OTTIENI TAVOLO
@@ -271,12 +270,22 @@ def show_cliente_page():
                 font-weight: 600 !important;
                 padding: 0.8rem 1.5rem !important;
                 border-radius: 50px !important;
+            }
+            
+            /* Pulsante primario (arancione) */
+            .stButton > button[data-baseweb="button"] {
                 background-color: #d35400 !important;
                 color: white !important;
                 border: none !important;
             }
-            .stButton > button:hover {
+            .stButton > button[data-baseweb="button"]:hover {
                 background-color: #e67e22 !important;
+            }
+            
+            /* Pulsante secondario (grigio) */
+            .stButton > button[kind="secondary"] {
+                background-color: #6c757d !important;
+                color: white !important;
             }
             
             /* Quantità input più grande */
@@ -326,6 +335,16 @@ def show_cliente_page():
                 padding: 1rem !important;
                 border-radius: 15px !important;
             }
+            
+            /* Info box */
+            .info-box {
+                background-color: #e7f3ff;
+                border-left: 8px solid #2196F3;
+                padding: 1.2rem;
+                border-radius: 15px;
+                margin: 1.5rem 0;
+                font-size: 1.3rem;
+            }
         </style>
     """, unsafe_allow_html=True)
     
@@ -349,10 +368,13 @@ def show_cliente_page():
     # ========================================================================
     # MESSAGGIO INFORMATIVO
     # ========================================================================
-    st.info("""
-        📋 **MENU DIGITALE** - Usa questa pagina come promemoria per il tuo ordine.
-        Seleziona i piatti che desideri e mostra la lista al cameriere.
-    """)
+    st.markdown("""
+        <div class="info-box">
+            📋 <strong>BENVENUTO!</strong> Questo è il nostro menu digitale.<br>
+            Puoi consultare tutti i piatti e creare un promemoria personale.<br>
+            Quando sei pronto, mostra la lista al cameriere per ordinare.
+        </div>
+    """, unsafe_allow_html=True)
     
     # ========================================================================
     # INIZIALIZZA CARRELLO PROMEMORIA
@@ -428,8 +450,7 @@ def show_cliente_page():
                                     'id': piatto['id'],
                                     'nome': piatto['nome'],
                                     'prezzo': piatto['prezzo'],
-                                    'qty': qty,
-                                    'note': ''
+                                    'qty': qty
                                 }
                                 st.session_state.promemoria.append(nuovo_item)
                                 st.success(f"✅ {qty}x {piatto['nome']} aggiunto al promemoria!")
@@ -467,7 +488,7 @@ def show_cliente_page():
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # Bottone elimina (più piccolo)
+                # Bottone elimina
                 col1, col2, col3 = st.columns([3, 1, 1])
                 with col3:
                     if st.button("🗑️", key=f"del_{key}"):
@@ -482,41 +503,22 @@ def show_cliente_page():
             
             st.markdown(f'<div class="promemoria-totale">TOTALE: {format_currency(totale)}</div>', unsafe_allow_html=True)
             
-            # Note opzionali
-            with st.expander("📝 Aggiungi note (opzionale)"):
-                note = st.text_area(
-                    "Allergie, preferenze...",
-                    placeholder="Es. Senza glutine, ben cotto...",
-                    height=100
-                )
-                if note:
-                    st.caption(f"📌 Nota salvata: {note}")
-            
-            # Pulsanti azione
-            col_svuota, col_cameriere = st.columns(2)
-            
-            with col_svuota:
-                if st.button("🗑️ SVUOTA", use_container_width=True):
-                    st.session_state.promemoria = []
-                    st.rerun()
-            
-            with col_cameriere:
-                if st.button("👨‍🍳 CHIAMA CAMERIERE", type="primary", use_container_width=True):
-                    st.balloons()
-                    st.success("""
-                        ✅ Il cameriere è stato chiamato!
-                        
-                        Mostragli il promemoria con la lista dei piatti.
-                    """)
+            # Pulsanti azione - SOLO SVUOTA
+            if st.button("🗑️ SVUOTA PROMEMORIA", use_container_width=True):
+                st.session_state.promemoria = []
+                st.rerun()
     
     # ========================================================================
     # ISTRUZIONI FINALI
     # ========================================================================
     st.markdown("---")
     st.markdown("""
-        <div style="text-align: center; padding: 1rem; background: #f8f9fa; border-radius: 15px;">
-            <p style="font-size: 1.3rem; margin: 0;">
-                📌 Mostra questa lista al cameriere per comunicare il tuo ordine
+        <div style="text-align: center; padding: 1.5rem; background: #f8f9fa; border-radius: 15px; margin-top: 2rem;">
+            <p style="font-size: 1.4rem; margin: 0; font-weight: 600;">
+                📌 Per ordinare, mostra questa lista al cameriere
+            </p>
+            <p style="font-size: 1.2rem; color: #666; margin-top: 0.5rem;">
+                Il personale sarà lieto di prendere il tuo ordine
             </p>
         </div>
     """, unsafe_allow_html=True)
